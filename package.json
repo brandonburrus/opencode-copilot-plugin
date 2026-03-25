@@ -3,10 +3,20 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "link": "mkdir -p ~/.config/opencode/plugins && rm -f ~/.config/opencode/plugins/opencode-copilot-plugin && ln -s $PWD ~/.config/opencode/plugins/opencode-copilot-plugin && echo 'Linked opencode-copilot-plugin to ~/.config/opencode/plugins/'",
+    "unlink": "rm -f ~/.config/opencode/plugins/opencode-copilot-plugin && echo 'Unlinked opencode-copilot-plugin from ~/.config/opencode/plugins/'"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@types/picomatch": "^4.0.2"
   },
   "peerDependencies": {
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.3.2",
+    "gray-matter": "^4.0.3",
+    "picomatch": "^4.0.4"
   }
 }
