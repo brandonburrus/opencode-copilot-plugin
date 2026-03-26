@@ -15,6 +15,13 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Verify tag ref
+        run: |
+          if [[ "${GITHUB_REF}" != refs/tags/* ]]; then
+            echo "Publish must be triggered from a tag ref, got: ${GITHUB_REF}"
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
