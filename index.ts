@@ -87,7 +87,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
      * instruction's `applyTo` glob patterns.
      */
     'experimental.chat.system.transform': async (input, output) => {
-      const { sessionID } = input as { sessionID?: string };
+      const { sessionID } = input;
       if (!sessionID) return;
 
       const trackedFiles = tracker.getTrackedFiles(sessionID);

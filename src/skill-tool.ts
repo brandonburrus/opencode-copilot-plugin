@@ -67,7 +67,7 @@ export function createCopilotSkillTool(getSkills: () => readonly CopilotSkill[])
       name: tool.schema
         .string()
         .describe(
-          'The name of the Copilot skill to load (e.g. "rsg-pdf", "rsg-confluence")',
+          'The name of the Copilot skill to load (e.g. "deploy-checklist", "coding-standards")',
         ),
     },
     async execute({ name }) {
