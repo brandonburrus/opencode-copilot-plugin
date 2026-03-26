@@ -19,6 +19,14 @@ import {
   LOCAL_SKILLS_SUBDIR,
   mergeSkills,
 } from './src/skills.ts';
+import {
+  executeHookCommand,
+  HookConfirmationTracker,
+  discoverHookRegistry,
+  type HookRegistry,
+  runHooks,
+  toCopilotToolName,
+} from './src/hooks/index.ts';
 
 /**
  * Tool names whose args include a `filePath` field.
@@ -27,7 +35,7 @@ import {
 const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
 
 /**
- * Mirrors GitHub Copilot's custom instruction and skill system into OpenCode.
+ * Mirrors GitHub Copilot's custom instruction, skill, and hooks system into OpenCode.
  *
  * **Custom instructions** — injected into the system prompt:
  * - `.github/copilot-instructions.md` — repo-wide, every session
@@ -39,17 +47,25 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
  * - `.github/skills/<name>/SKILL.md` — project-local skills
  * - `~/.copilot/skills/<name>/SKILL.md` — user-global skills
  *
+ * **Hooks** — executes Copilot hook scripts at key agent lifecycle points:
+ * - `.github/hooks/*.json` — project-local hooks
+ * - `~/.copilot/hooks/*.json` — user-global hooks (run after project hooks)
+ * Hook files are loaded once at plugin init; changes require an OpenCode restart.
+ *
  * **How it works:**
- * 1. On init, both caches (instructions + skills) are discovered and stored.
+ * 1. On init, all caches (instructions, skills, hooks) are discovered and stored.
  * 2. `tool.execute.after` tracks which files the LLM has accessed, feeding `applyTo` matching.
  * 3. `experimental.chat.system.transform` injects instructions before each LLM call.
  * 4. `tool.definition` keeps the `copilot_skill` tool description current after hot-reloads.
- * 5. `event` watches for file changes to hot-reload each cache independently, and frees
- *    per-session tracking data when sessions are deleted.
+ * 5. `event` watches for instruction/skill file changes to hot-reload those caches independently,
+ *    and frees per-session tracking data when sessions are deleted.
+ * 6. `tool.execute.before` runs `preToolUse` hooks, blocking tool calls as needed.
+ * 7. `chat.message` runs `userPromptSubmitted` hooks on each new user message.
  */
-export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, client }) => {
+export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, client, $ }) => {
   const rootDir = worktree || directory;
   const tracker = new FileTracker();
+  const confirmationTracker = new HookConfirmationTracker();
 
   /** Project-level instruction cache — replaced on hot-reload. */
   let projectInstructions: Instruction[] = await discoverInstructions(rootDir);
@@ -66,6 +82,12 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
   /** Merged, deduplicated skill list. Local skills take precedence over global. */
   let allSkills: CopilotSkill[] = mergeSkills(localSkills, globalSkills);
 
+  /**
+   * Hook registry loaded once at init — not hot-reloaded.
+   * Project hooks run before global hooks for each hook type.
+   */
+  const hookRegistry: HookRegistry = await discoverHookRegistry(rootDir);
+
   /** Absolute path of the project-level skills directory — used for hot-reload path matching. */
   const localSkillsDir = path.join(rootDir, LOCAL_SKILLS_SUBDIR);
 
@@ -74,7 +96,8 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
     'info',
     `Loaded ${projectInstructions.length} project instruction(s), ` +
       `${globalInstructions.length} global instruction(s), ` +
-      `${allSkills.length} skill(s) (${localSkills.length} local, ${globalSkills.length} global)`,
+      `${allSkills.length} skill(s) (${localSkills.length} local, ${globalSkills.length} global), ` +
+      `${Object.keys(hookRegistry).length} hook type(s)`,
   );
 
   /** Base hooks — always registered. */
@@ -106,16 +129,112 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
     },
 
     /**
+     * Runs `preToolUse` Copilot hooks before each tool call, blocking execution
+     * when a hook returns `"deny"` or `"ask"`.
+     *
+     * When a hook returns `"ask"`, the call is blocked and the agent is instructed
+     * to confirm with the user. On the next identical call (same tool + same args),
+     * only that specific hook is bypassed — other hooks still run. One-shot.
+     */
+    'tool.execute.before': async (input, output) => {
+      const preToolHooks = hookRegistry.preToolUse;
+      if (!preToolHooks?.length) return;
+
+      const copilotToolName = toCopilotToolName(input.tool);
+      const argsJson = JSON.stringify(output.args);
+      const hookInput = JSON.stringify({
+        timestamp: Date.now(),
+        cwd: rootDir,
+        toolName: copilotToolName,
+        toolArgs: argsJson,
+      });
+
+      for (let i = 0; i < preToolHooks.length; i++) {
+        if (confirmationTracker.consumeConfirmation(input.sessionID, i, copilotToolName, argsJson)) {
+          continue;
+        }
+
+        const hook = preToolHooks[i]!;
+        const result = await executeHookCommand(hook, hookInput, rootDir, $);
+
+        if (!result.stdout.trim()) continue;
+
+        try {
+          const parsed = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+          if (parsed['permissionDecision'] === 'deny') {
+            throw new Error(
+              typeof parsed['permissionDecisionReason'] === 'string'
+                ? parsed['permissionDecisionReason']
+                : 'Denied by Copilot hook',
+            );
+          }
+          if (parsed['permissionDecision'] === 'ask') {
+            confirmationTracker.markPendingConfirmation(input.sessionID, i, copilotToolName, argsJson);
+            throw new Error(
+              `A Copilot hook requires confirmation before allowing "${copilotToolName}": ` +
+                `${typeof parsed['permissionDecisionReason'] === 'string' ? parsed['permissionDecisionReason'] : 'no reason given'}. ` +
+                `Ask the user to confirm this action, then retry the exact same tool call.`,
+            );
+          }
+        } catch (e) {
+          if (
+            e instanceof Error &&
+            (e.message.includes('Denied by') || e.message.includes('requires confirmation'))
+          ) {
+            throw e;
+          }
+          // JSON parse failure or unexpected shape — ignore and continue
+        }
+      }
+    },
+
+    /**
      * Tracks which files the LLM has read, written, or edited within a session.
      * This data feeds the `applyTo` matching logic in `experimental.chat.system.transform`.
+     *
+     * Also dispatches `postToolUse` Copilot hooks after each tool call completes.
      */
-    'tool.execute.after': async (input) => {
-      if (!FILE_TOOLS.has(input.tool)) return;
+    'tool.execute.after': async (input, output) => {
+      if (FILE_TOOLS.has(input.tool)) {
+        const filePath: unknown = input.args?.filePath ?? input.args?.file;
+        if (typeof filePath === 'string' && filePath.length > 0) {
+          tracker.trackFile(input.sessionID, filePath, rootDir);
+        }
+      }
 
-      const filePath: unknown = input.args?.filePath ?? input.args?.file;
-      if (typeof filePath !== 'string' || filePath.length === 0) return;
+      if (hookRegistry.postToolUse?.length) {
+        const inputJson = JSON.stringify({
+          timestamp: Date.now(),
+          cwd: rootDir,
+          toolName: toCopilotToolName(input.tool),
+          toolArgs: JSON.stringify(input.args),
+          toolResult: {
+            resultType: 'success',
+            textResultForLlm: output.output ?? '',
+          },
+        });
+        await runHooks('postToolUse', inputJson, hookRegistry, rootDir, $);
+      }
+    },
 
-      tracker.trackFile(input.sessionID, filePath, rootDir);
+    /**
+     * Dispatches `userPromptSubmitted` Copilot hooks when a new user message is received.
+     * The prompt text is assembled from all text parts in the message.
+     */
+    'chat.message': async (_input, output) => {
+      if (!hookRegistry.userPromptSubmitted?.length) return;
+
+      const promptText = output.parts
+        .filter((p): p is Extract<typeof p, { type: 'text' }> => p.type === 'text')
+        .map((p) => p.text)
+        .join('\n');
+
+      const inputJson = JSON.stringify({
+        timestamp: Date.now(),
+        cwd: rootDir,
+        prompt: promptText,
+      });
+      await runHooks('userPromptSubmitted', inputJson, hookRegistry, rootDir, $);
     },
 
     /**
@@ -125,7 +244,10 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
      * - `file.watcher.updated` on a global instruction path: hot-reloads the global cache.
      * - `file.watcher.updated` on the local skills dir: hot-reloads local skills.
      * - `file.watcher.updated` on the global skills dir: hot-reloads global skills.
-     * - `session.deleted`: frees per-session file tracking data to prevent memory growth.
+     * - `session.created`: runs `sessionStart` Copilot hooks.
+     * - `session.deleted`: frees per-session tracking data; runs `sessionEnd` Copilot hooks.
+     * - `session.idle`: runs `agentStop` Copilot hooks.
+     * - `session.error`: runs `errorOccurred` Copilot hooks.
      */
     event: async ({ event }) => {
       if (event.type === 'file.watcher.updated') {
@@ -169,9 +291,63 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         }
       }
 
+      if (event.type === 'session.created') {
+        const info = (event.properties as Record<string, unknown>)?.['info'] as Record<string, unknown> | undefined;
+        const sessionID = info?.['id'] as string | undefined;
+        await runHooks(
+          'sessionStart',
+          JSON.stringify({ timestamp: Date.now(), cwd: rootDir, source: 'new', initialPrompt: '' }),
+          hookRegistry,
+          rootDir,
+          $,
+        );
+        await log(client, 'info', `Ran sessionStart hooks for session ${sessionID ?? 'unknown'}`);
+      }
+
       if (event.type === 'session.deleted') {
-        const sessionID: string = ((event.properties as Record<string, unknown>)?.['id'] as string) ?? '';
-        if (sessionID) tracker.clearSession(sessionID);
+        const deletedInfo = (event.properties as Record<string, unknown>)?.['info'] as Record<string, unknown> | undefined;
+        const sessionID: string = (deletedInfo?.['id'] as string | undefined) ?? '';
+        tracker.clearSession(sessionID);
+        confirmationTracker.clearSession(sessionID);
+        await runHooks(
+          'sessionEnd',
+          JSON.stringify({ timestamp: Date.now(), cwd: rootDir, reason: 'complete' }),
+          hookRegistry,
+          rootDir,
+          $,
+        );
+      }
+
+      if (event.type === 'session.idle') {
+        await runHooks(
+          'agentStop',
+          JSON.stringify({ timestamp: Date.now(), cwd: rootDir }),
+          hookRegistry,
+          rootDir,
+          $,
+        );
+      }
+
+      if (event.type === 'session.error') {
+        const error = (event.properties as Record<string, unknown>)?.['error'] as
+          | Record<string, unknown>
+          | undefined;
+        const errorData = (error?.['data'] as Record<string, unknown> | undefined) ?? {};
+        await runHooks(
+          'errorOccurred',
+          JSON.stringify({
+            timestamp: Date.now(),
+            cwd: rootDir,
+            error: {
+              message: (errorData['message'] as string | undefined) ?? 'Unknown error',
+              name: (error?.['name'] as string | undefined) ?? 'Error',
+              stack: '',
+            },
+          }),
+          hookRegistry,
+          rootDir,
+          $,
+        );
       }
     },
   };

@@ -33,9 +33,55 @@ OpenCode installs npm plugins automatically at startup — no separate install s
 - When at least one skill exists at startup, a `copilot_skill` tool is registered so the LLM can load skills on demand.
 - Local skills shadow global skills of the same name.
 
+### Hooks
+
+Executes Copilot hook scripts at key lifecycle points in each agent session. Hook scripts receive JSON on stdin and can approve, deny, or request confirmation for tool calls.
+
+- **Project-local** — `.github/hooks/*.json`
+- **User-global** — `~/.copilot/hooks/*.json`
+- Project hooks run before global hooks for each hook type.
+
+Supported hook types:
+
+| Hook type | When it fires |
+| --- | --- |
+| `sessionStart` | When a new session is created |
+| `sessionEnd` | When a session is deleted |
+| `userPromptSubmitted` | When a new user message is received |
+| `preToolUse` | Before each tool call — can block execution |
+| `postToolUse` | After each successful tool call |
+| `agentStop` | When the agent finishes responding (session goes idle) |
+| `errorOccurred` | When a session error occurs |
+
+Hook configuration files use the same format as [GitHub Copilot hooks](https://docs.github.com/en/copilot/reference/hooks-configuration):
+
+```json
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "./scripts/security-check.sh",
+        "cwd": ".",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}
+```
+
+**`preToolUse` permission decisions:** If a hook script outputs `{"permissionDecision":"deny","permissionDecisionReason":"..."}`, the tool call is blocked. If it outputs `{"permissionDecision":"ask","permissionDecisionReason":"..."}`, the agent is instructed to confirm with the user before retrying — on the next identical tool call (same tool and arguments), that specific hook is bypassed.
+
+**Tool name mapping:** Hook scripts receive Copilot-equivalent tool names (`view` instead of `read`, `create` instead of `write`) so existing scripts work unmodified.
+
+**Platform note:** Only `bash` commands are executed. `powershell` commands are silently skipped on macOS/Linux.
+
+**No hot-reload:** Hook files are loaded once when the plugin initialises. Changes to hook files require an OpenCode restart to take effect.
+
 ### Hot-reload
 
-Instruction files and skill directories are re-parsed automatically when they change on disk — no OpenCode restart required.
+Instruction files and skill directories are re-parsed automatically when they change on disk — no OpenCode restart required. Hook files are the exception — see note above.
 
 ## License
 
