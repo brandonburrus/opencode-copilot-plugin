@@ -1,5 +1,6 @@
 import * as path from 'node:path';
 import type { Hooks, Plugin } from '@opencode-ai/plugin';
+import type { Part } from '@opencode-ai/sdk';
 import { FileTracker } from './src/file-tracker.ts';
 import { formatInstruction } from './src/format.ts';
 import { matchesApplyTo } from './src/glob-matcher.ts';
@@ -37,6 +38,18 @@ import {
   mergeAgents,
 } from './src/agents/index.ts';
 import { buildAgentToolDescription, createCopilotAgentTool } from './src/agent-tool.ts';
+import {
+  type CopilotPrompt,
+  discoverGlobalPrompts,
+  discoverLocalPrompts,
+  formatPromptHeader,
+  GLOBAL_PROMPTS_DIR,
+  LOCAL_PROMPTS_SUBDIR,
+  mergePrompts,
+  parseCommandArguments,
+  resolveFileReferences,
+  substituteArguments,
+} from './src/prompts/index.ts';
 
 /**
  * Tool names whose args include a `filePath` field.
@@ -45,7 +58,8 @@ import { buildAgentToolDescription, createCopilotAgentTool } from './src/agent-t
 const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
 
 /**
- * Mirrors GitHub Copilot's custom instruction, skill, hooks, and agent system into OpenCode.
+ * Mirrors GitHub Copilot's custom instruction, skill, hooks, agent, and prompt
+ * file system into OpenCode.
  *
  * **Custom instructions** — injected into the system prompt:
  * - `.github/copilot-instructions.md` — repo-wide, every session
@@ -67,15 +81,24 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
  * - `~/.copilot/agents/*.agent.md` or `*.md` — user-global agents
  * Agents can also define scoped hooks that run only when the agent is active.
  *
+ * **Prompt files** — surfaced as slash commands via `command.execute.before`:
+ * - `.github/prompts/*.prompt.md` — project-local prompt files
+ * - `~/.copilot/prompts/*.prompt.md` — user-global prompt files
+ * When a command matching a prompt file name is invoked, its content is
+ * resolved (including file references) and substituted with any provided
+ * arguments before being sent to the LLM.
+ *
  * **How it works:**
- * 1. On init, all caches (instructions, skills, hooks, agents) are discovered and stored.
+ * 1. On init, all caches (instructions, skills, hooks, agents, prompts) are discovered and stored.
  * 2. `tool.execute.after` tracks which files the LLM has accessed, feeding `applyTo` matching.
  * 3. `experimental.chat.system.transform` injects instructions before each LLM call.
  * 4. `tool.definition` keeps the `copilot_skill` and `copilot_agent` tool descriptions current.
- * 5. `event` watches for instruction/skill/agent file changes to hot-reload caches independently,
- *    and frees per-session tracking data when sessions are deleted.
+ * 5. `event` watches for instruction/skill/agent/prompt file changes to hot-reload caches
+ *    independently, and frees per-session tracking data when sessions are deleted.
  * 6. `tool.execute.before` runs global `preToolUse` hooks, then agent-scoped ones if active.
  * 7. `chat.message` runs `userPromptSubmitted` hooks (global then agent-scoped).
+ * 8. `command.execute.before` intercepts commands matching prompt file names, resolves their
+ *    content (file references + argument substitution), and injects the result as the message.
  */
 export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, client, $ }) => {
   const rootDir = worktree || directory;
@@ -113,11 +136,23 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
   /** Merged, deduplicated agent list. Local agents take precedence over global. */
   let allAgents: CopilotAgent[] = mergeAgents(localAgents, globalAgents);
 
+  /** Project-local prompt cache — replaced on hot-reload. */
+  let localPrompts: CopilotPrompt[] = await discoverLocalPrompts(rootDir);
+
+  /** User-global prompt cache — replaced on hot-reload. */
+  let globalPrompts: CopilotPrompt[] = await discoverGlobalPrompts();
+
+  /** Merged, deduplicated prompt list. Local prompts take precedence over global. */
+  let allPrompts: CopilotPrompt[] = mergePrompts(localPrompts, globalPrompts);
+
   /** Absolute path of the project agents directory — used for agent hot-reload path matching. */
   const localAgentsDir = path.join(rootDir, LOCAL_AGENTS_SUBDIR);
 
   /** Absolute path of the project-level skills directory — used for hot-reload path matching. */
   const localSkillsDir = path.join(rootDir, LOCAL_SKILLS_SUBDIR);
+
+  /** Absolute path of the project-level prompts directory — used for hot-reload path matching. */
+  const localPromptsDir = path.join(rootDir, LOCAL_PROMPTS_SUBDIR);
 
   await log(
     client,
@@ -126,7 +161,8 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
       `${globalInstructions.length} global instruction(s), ` +
       `${allSkills.length} skill(s) (${localSkills.length} local, ${globalSkills.length} global), ` +
       `${Object.keys(hookRegistry).length} hook type(s), ` +
-      `${allAgents.length} agent(s) (${localAgents.length} local, ${globalAgents.length} global)`,
+      `${allAgents.length} agent(s) (${localAgents.length} local, ${globalAgents.length} global), ` +
+      `${allPrompts.length} prompt(s) (${localPrompts.length} local, ${globalPrompts.length} global)`,
   );
 
   /** Base hooks — always registered. */
@@ -332,6 +368,39 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
     },
 
     /**
+     * Intercepts command invocations and replaces the message parts with fully
+     * resolved prompt file content when the command name matches a discovered
+     * `.prompt.md` file.
+     *
+     * Command names in OpenCode are prefixed by their source scope:
+     * - `user:<name>` — from the user-level commands directory
+     * - `project:<name>` — from the project-level commands directory
+     *
+     * The prompt is matched by stripping those prefixes and comparing against
+     * each prompt's canonical name. Both local and global prompts are checked.
+     *
+     * On a match:
+     * 1. Markdown file references in the prompt body are resolved and inlined.
+     * 2. Argument placeholders are substituted with values parsed from `input.arguments`.
+     * 3. An informational header is prepended identifying the prompt source and
+     *    surfacing any unsupported frontmatter fields (agent, model, tools).
+     * 4. `output.parts` is replaced with a single text part containing the
+     *    fully resolved prompt content.
+     */
+    'command.execute.before': async (input, output) => {
+      const commandBaseName = extractCommandBaseName(input.command);
+      const prompt = allPrompts.find((p) => p.name === commandBaseName);
+      if (!prompt) return;
+
+      const resolvedContent = await resolveFileReferences(prompt.content, prompt.dirPath);
+      const argValues = parseCommandArguments(input.arguments, prompt.arguments);
+      const finalContent = substituteArguments(resolvedContent, prompt.arguments, argValues);
+      const header = formatPromptHeader(prompt);
+
+      output.parts = [{ type: 'text', text: header + finalContent } as unknown as Part];
+    },
+
+    /**
      * Handles file watcher and session lifecycle events:
      *
      * - `file.watcher.updated` on a project instruction path: hot-reloads the project cache.
@@ -340,6 +409,8 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
      * - `file.watcher.updated` on the global skills dir: hot-reloads global skills.
      * - `file.watcher.updated` on a local agents dir: hot-reloads local agents.
      * - `file.watcher.updated` on the global agents dir: hot-reloads global agents.
+     * - `file.watcher.updated` on the local prompts dir: hot-reloads local prompts.
+     * - `file.watcher.updated` on the global prompts dir: hot-reloads global prompts.
      * - `session.created`: runs `sessionStart` Copilot hooks (global then agent-scoped).
      * - `session.deleted`: frees per-session tracking data; runs `sessionEnd` hooks.
      * - `session.idle`: runs `agentStop` hooks (global then agent-scoped).
@@ -357,6 +428,8 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         const isGlobalSkill = changedPath.startsWith(GLOBAL_SKILLS_DIR);
         const isLocalAgent = changedPath.startsWith(localAgentsDir);
         const isGlobalAgent = changedPath.startsWith(GLOBAL_AGENTS_DIR);
+        const isLocalPrompt = changedPath.startsWith(localPromptsDir);
+        const isGlobalPrompt = changedPath.startsWith(GLOBAL_PROMPTS_DIR);
 
         if (isProjectInstruction) {
           projectInstructions = await discoverInstructions(rootDir);
@@ -405,6 +478,26 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
             client,
             'info',
             `Hot-reloaded ${allAgents.length} agent(s) after change to ${changedPath}`,
+          );
+        }
+
+        if (isLocalPrompt) {
+          localPrompts = await discoverLocalPrompts(rootDir);
+          allPrompts = mergePrompts(localPrompts, globalPrompts);
+          await log(
+            client,
+            'info',
+            `Hot-reloaded ${allPrompts.length} prompt(s) after change to ${changedPath}`,
+          );
+        }
+
+        if (isGlobalPrompt) {
+          globalPrompts = await discoverGlobalPrompts();
+          allPrompts = mergePrompts(localPrompts, globalPrompts);
+          await log(
+            client,
+            'info',
+            `Hot-reloaded ${allPrompts.length} prompt(s) after change to ${changedPath}`,
           );
         }
       }
@@ -506,6 +599,26 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
 
   return hooks;
 };
+
+/**
+ * Extracts the base command name by stripping OpenCode's scope prefixes.
+ *
+ * OpenCode prefixes commands with their source:
+ * - `user:<name>` — from the user-level commands directory
+ * - `project:<name>` — from the project-level commands directory
+ *
+ * Nested command paths (e.g., `user:subdir:name`) have all segments after
+ * the scope prefix joined with `/` to form a path-like name. This allows
+ * prompt files in subdirectories to be addressed by their relative path.
+ */
+function extractCommandBaseName(command: string): string {
+  const colonIndex = command.indexOf(':');
+  if (colonIndex === -1) return command;
+
+  const afterPrefix = command.slice(colonIndex + 1);
+  // Replace remaining colons (subdirectory separators) with slashes
+  return afterPrefix.replace(/:/g, '/');
+}
 
 /**
  * Writes a structured log entry via the OpenCode SDK client.

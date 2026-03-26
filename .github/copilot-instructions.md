@@ -1,4 +1,4 @@
-This is **opencode-copilot-plugin** — a TypeScript/Bun OpenCode plugin that mirrors GitHub Copilot's custom instruction, skill, hooks, and agent system into OpenCode sessions.
+This is **opencode-copilot-plugin** — a TypeScript/Bun OpenCode plugin that mirrors GitHub Copilot's custom instruction, skill, hooks, agent, and prompt file system into OpenCode sessions.
 
 ## Project layout
 
@@ -24,19 +24,26 @@ src/
     types.ts              CopilotAgent, CopilotAgentFrontmatter, CopilotHandoffDef, AgentHookCommandDef types
     discovery.ts          Discovers & parses *.agent.md / *.md from .github/agents/ and ~/.copilot/agents/
     agent-tracker.ts      Per-session tracker: active agent name
+  prompts/
+    index.ts              Barrel re-export for the prompts subsystem
+    types.ts              CopilotPrompt, CopilotPromptFrontmatter, PromptArgument types
+    discovery.ts          Discovers & parses *.prompt.md from .github/prompts/ and ~/.copilot/prompts/; extractArguments, substituteArguments
+    resolve-references.ts Resolves markdown file references ([file.md](../path)) and inlines them as <referenced_file> XML blocks
+    format.ts             formatPromptHeader (informational header with unsupported-field notes), parseCommandArguments
 dist/                 Build output (Bun bundler, node target)
 ```
 
 ## Runtime model
 
-The plugin is a single async factory (`CopilotInstructionsPlugin`) that returns an OpenCode `Hooks` object. Six hooks are registered:
+The plugin is a single async factory (`CopilotInstructionsPlugin`) that returns an OpenCode `Hooks` object. Seven hooks are registered:
 
 - `experimental.chat.system.transform` — injects instructions into the system prompt before each LLM call. Repo-wide instructions are always appended; path-specific instructions only when the session's tracked files match their `applyTo` patterns.
 - `tool.execute.before` — runs global `preToolUse` Copilot hooks before each tool call, blocking execution when a hook returns `"deny"` or `"ask"`. If a session has an active agent, agent-scoped `preToolUse` hooks run afterward.
 - `tool.execute.after` — tracks every file path accessed via `read`, `edit`, `write`, or `patch` tools for the current session. Also dispatches `postToolUse` hooks (global then agent-scoped).
 - `tool.definition` — keeps the `copilot_skill` and `copilot_agent` tool descriptions current (lists can hot-reload).
 - `chat.message` — dispatches `userPromptSubmitted` hooks (global then agent-scoped) when a new user message is received.
-- `event` — handles `file.watcher.updated` for hot-reloading instruction/skill/agent caches independently; dispatches session lifecycle hooks (`sessionStart`, `sessionEnd`, `agentStop`, `errorOccurred`); frees per-session tracker memory on `session.deleted`.
+- `command.execute.before` — intercepts slash command execution; when the command name matches a known prompt, resolves markdown file references, substitutes argument placeholders, prepends an informational header, and replaces `output.parts` with the fully resolved prompt content.
+- `event` — handles `file.watcher.updated` for hot-reloading instruction/skill/agent/prompt caches independently; dispatches session lifecycle hooks (`sessionStart`, `sessionEnd`, `agentStop`, `errorOccurred`); frees per-session tracker memory on `session.deleted`.
 
 The `copilot_skill` tool is only registered when at least one skill exists at startup. The `copilot_agent` tool is only registered when at least one agent exists at startup. Items added after init require an OpenCode restart.
 
@@ -55,6 +62,8 @@ Hook files are loaded once at plugin init and are not hot-reloaded. Changes to h
 | User-global hooks | `~/.copilot/hooks/*.json` |
 | Project-local agents | `.github/agents/*.agent.md` or `*.md` |
 | User-global agents | `~/.copilot/agents/*.agent.md` or `*.md` |
+| Project-local prompts | `.github/prompts/*.prompt.md` |
+| User-global prompts | `~/.copilot/prompts/*.prompt.md` |
 
 Path-specific instruction files require an `applyTo` frontmatter field (comma-separated glob patterns). Skill `SKILL.md` files require a `description` frontmatter field. Agent files require a `description` frontmatter field.
 
@@ -62,12 +71,15 @@ Hook config files must have `"version": 1` at the root and a `"hooks"` object ma
 
 Agent files use `.agent.md` extension (or plain `.md` in the agents directory). The canonical agent name is derived from the filename (minus `.agent.md` or `.md` extension). Agents with `target: "github-copilot"` are skipped — they are cloud-only agents.
 
+Prompt files use the `.prompt.md` extension. The canonical prompt name is derived from the filename (minus `.prompt.md`). All frontmatter fields are optional — a prompt file with no frontmatter is valid. The `description` field falls back to the canonical name when absent.
+
 ## Key invariants
 
 - Local skills shadow global skills of the same name (warning written to stderr).
 - Local agents shadow global agents of the same name (warning written to stderr).
+- Local prompts shadow global prompts of the same name (warning written to stderr).
 - `FileTracker` stores paths relative to the project root so they can be matched directly against `applyTo` patterns without prefix stripping.
-- All caches (`projectInstructions`, `globalInstructions`, `localSkills`, `globalSkills`, `localAgents`, `globalAgents`) are module-level `let` bindings in the plugin factory — replaced atomically on hot-reload.
+- All caches (`projectInstructions`, `globalInstructions`, `localSkills`, `globalSkills`, `localAgents`, `globalAgents`, `localPrompts`, `globalPrompts`) are module-level `let` bindings in the plugin factory — replaced atomically on hot-reload.
 - The plugin never throws; missing directories and unreadable files are silently skipped.
 - Project hooks run before global hooks for each hook type.
 - Agent-scoped hooks run after global hooks of the same type.
@@ -80,6 +92,12 @@ Agent files use `.agent.md` extension (or plain `.md` in the agents directory). 
 - `AgentTracker` stores the active agent name per session. Only one agent can be active per session at a time; loading a new agent replaces the previous one.
 - The `copilot_agent` tool returns agent content wrapped in `<agent_content>` XML tags, including the markdown body plus informational sections for tools, model, subagents, and handoffs.
 - Agents with `user-invocable: false` (or deprecated `infer: false`) are excluded from the `copilot_agent` tool listing but can still be loaded by name if explicitly requested.
+- Prompt canonical name is derived from the filename (minus `.prompt.md`). If a `name` frontmatter field is present but differs from the filename-derived name, a warning is emitted and the filename-derived name is used.
+- Prompt discovery is flat (non-recursive) — only files directly inside the prompts directory are scanned.
+- `resolveFileReferences` resolves markdown link syntax (`[label](./relative/path.md)`) by reading the referenced file and inlining it as a `<referenced_file path="...">` XML block. Resolution is capped at 100 KB total and 5 levels deep; circular references are detected and skipped.
+- Prompt argument substitution supports two syntaxes: VS Code style `${input:varName}` / `${input:varName:placeholder}` and Copilot/Crush style `$VAR_NAME` (uppercase with underscores). Unmatched placeholders are left as-is.
+- `parseCommandArguments` handles both `key=value` pairs (with quoted-value support) and positional strings (mapped to the first declared argument).
+- The `command.execute.before` hook matches commands by their base name (scope prefix and `:` path separators stripped). Unsupported frontmatter fields (`agent`, `model`, `tools`) are surfaced as informational notes in the prepended header but are not enforced.
 
 ## Dev workflow
 
