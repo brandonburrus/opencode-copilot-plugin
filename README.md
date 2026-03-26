@@ -1,14 +1,19 @@
 # opencode-copilot-plugin
 
-An [OpenCode](https://opencode.ai) plugin that mirrors GitHub Copilot's custom instruction and skill system. It discovers instruction files from your repository and user-global directories, injects them into the LLM's system prompt, and registers a `copilot_skill` tool so the LLM can load Copilot skills on demand.
+[![npm version](https://img.shields.io/npm/v/opencode-copilot-plugin)](https://www.npmjs.com/package/opencode-copilot-plugin)
+[![license](https://img.shields.io/npm/l/opencode-copilot-plugin)](./LICENSE)
+
+An [OpenCode](https://opencode.ai) plugin that emulates [GitHub Copilot](https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot)'s custom instruction and skill system inside OpenCode.
+
+If you already have `.github/copilot-instructions.md`, `.github/instructions/` files, or `~/.copilot/skills/` directories set up for GitHub Copilot, this plugin makes those same files work in OpenCode with no duplication or changes to your existing configuration.
 
 ## Features
 
 ### Custom instructions
 
-- **Repo-wide instructions** — `.github/copilot-instructions.md` is injected into every session automatically.
-- **Project path-specific instructions** — `.github/instructions/*.instructions.md` files are injected only when the LLM has accessed files matching the `applyTo` glob patterns.
-- **Global path-specific instructions** — `~/.copilot/instructions/*.instructions.md` files work exactly like project path-specific instructions but apply across every workspace on your machine.
+- **Repo-wide instructions** — `.github/copilot-instructions.md` is injected into every OpenCode session automatically, just as Copilot does in VS Code.
+- **Project path-specific instructions** — `.github/instructions/**/*.instructions.md` files are injected only when the LLM has accessed files matching the instruction's `applyTo` glob patterns.
+- **Global path-specific instructions** — `~/.copilot/instructions/**/*.instructions.md` files work exactly like project path-specific instructions but apply across every workspace on your machine.
 
 ### Skills
 
@@ -19,20 +24,36 @@ An [OpenCode](https://opencode.ai) plugin that mirrors GitHub Copilot's custom i
 
 ### Hot-reload & lifecycle
 
-- **Hot-reload** — instruction files and skill directories are re-parsed whenever they change on disk; no restart required. Each cache reloads independently.
-- **Session cleanup** — per-session file tracking is freed when sessions are deleted.
+- **Hot-reload** — instruction files and skill directories are re-parsed whenever they change on disk; no OpenCode restart required. Each cache reloads independently.
+- **Session cleanup** — per-session file tracking is freed when sessions are deleted, preventing unbounded memory growth.
 
 ## Installation
 
-### As a local project plugin
+### From npm (recommended)
 
-Copy or symlink the plugin directory into your project's plugin folder:
+Add the plugin to your `opencode.json`:
 
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": ["opencode-copilot-plugin"]
+}
 ```
-.opencode/plugins/opencode-copilot-plugin/
+
+OpenCode installs npm plugins automatically at startup using Bun — no separate install step needed.
+
+### As a global plugin
+
+Clone or download this repository and symlink it into your global OpenCode plugins directory:
+
+```bash
+git clone https://github.com/brandonburrus/opencode-copilot-plugin.git
+cd opencode-copilot-plugin
+bun install
+bun run link   # symlinks into ~/.config/opencode/plugins/
 ```
 
-Then add a `package.json` to `.opencode/` listing the dependencies:
+Then add a `package.json` to `~/.config/opencode/` listing the runtime dependencies:
 
 ```json
 {
@@ -44,21 +65,21 @@ Then add a `package.json` to `.opencode/` listing the dependencies:
 }
 ```
 
-### As a global plugin
+### As a project-local plugin
 
-Place the files in `~/.config/opencode/plugins/opencode-copilot-plugin/` and add the same `package.json` to `~/.config/opencode/`.
+Place the plugin under `.opencode/plugins/opencode-copilot-plugin/` and add a `package.json` to `.opencode/` with the same dependencies as above.
 
 ## File locations
 
 ### Instructions
 
-| Scope | Path | Type |
+| Scope | Path | Behaviour |
 |---|---|---|
 | Repo-wide | `.github/copilot-instructions.md` | Always injected |
-| Project path-specific | `.github/instructions/**/*.instructions.md` | `applyTo` matched |
-| Global path-specific | `~/.copilot/instructions/**/*.instructions.md` | `applyTo` matched |
+| Project path-specific | `.github/instructions/**/*.instructions.md` | Injected when tracked files match `applyTo` |
+| Global path-specific | `~/.copilot/instructions/**/*.instructions.md` | Injected when tracked files match `applyTo` |
 
-There is no user-global equivalent of `copilot-instructions.md` — personal instructions in GitHub Copilot are either set via the GitHub.com UI (not file-based) or stored as path-specific `.instructions.md` files under `~/.copilot/instructions/`.
+> There is no user-global equivalent of `copilot-instructions.md` — personal instructions in GitHub Copilot are either set via the GitHub.com UI (not file-based) or stored as path-specific `.instructions.md` files under `~/.copilot/instructions/`.
 
 ### Skills
 
@@ -158,16 +179,22 @@ Supported glob syntax:
 
 ## How the `copilot_skill` tool works
 
-At startup the plugin discovers all `SKILL.md` files under `.copilot/skills/` and `~/.copilot/skills/`. If at least one skill is found, a `copilot_skill` tool is registered. The tool description contains an `<available_copilot_skills>` block listing every skill's name and description — identical in structure to OpenCode's native `skill` tool — so the LLM applies the same heuristics to both.
+At startup the plugin discovers all `SKILL.md` files under `.copilot/skills/` and `~/.copilot/skills/`. If at least one skill is found, a `copilot_skill` tool is registered. The tool description contains an `<available_copilot_skills>` block listing every skill's name and description — identical in structure to OpenCode's native `skill` tool — so the LLM applies the same decision-making heuristics to both.
 
 When the LLM calls `copilot_skill` with a skill name, the plugin returns the full body of that skill's `SKILL.md` wrapped in a `<skill_content>` tag.
 
-Skills added after OpenCode starts (i.e. after plugin init) require a restart to appear. Skills modified in place are hot-reloaded automatically.
+Skills added after OpenCode starts require a restart to appear. Skills modified in place are hot-reloaded automatically.
 
 ## Development
 
 ```bash
 bun install
-bun tsc --noEmit   # type-check
-bun run link       # symlink into ~/.config/opencode/plugins/
+bun run typecheck   # type-check without emitting
+bun run build       # compile to dist/
+bun run link        # symlink into ~/.config/opencode/plugins/
+bun run unlink      # remove the symlink
 ```
+
+## License
+
+MIT © [Brandon Burrus](https://github.com/brandonburrus)
