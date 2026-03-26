@@ -1,4 +1,4 @@
-This is **opencode-copilot-plugin** — a TypeScript/Bun OpenCode plugin that mirrors GitHub Copilot's custom instruction, skill, and hooks system into OpenCode sessions.
+This is **opencode-copilot-plugin** — a TypeScript/Bun OpenCode plugin that mirrors GitHub Copilot's custom instruction, skill, hooks, and agent system into OpenCode sessions.
 
 ## Project layout
 
@@ -8,6 +8,7 @@ src/
   instructions.ts     Discovers & parses .github/copilot-instructions.md and *.instructions.md files
   skills.ts           Discovers & parses SKILL.md files from .github/skills/ and ~/.copilot/skills/
   skill-tool.ts       Builds the copilot_skill tool definition and its XML description block
+  agent-tool.ts       Builds the copilot_agent tool definition and its XML description block
   format.ts           Formats a parsed Instruction into a system-prompt string
   glob-matcher.ts     applyTo glob matching via picomatch
   file-tracker.ts     Per-session file access tracker with FIFO eviction (max 500 paths)
@@ -18,6 +19,11 @@ src/
     executor.ts           Executes hook commands by piping JSON to stdin; handles timeouts
     confirmation-tracker.ts  Tracks "ask" decisions from preToolUse hooks for one-shot bypass
     tool-names.ts         Maps OpenCode tool names to Copilot-equivalent names
+  agents/
+    index.ts              Barrel re-export for the agents subsystem
+    types.ts              CopilotAgent, CopilotAgentFrontmatter, CopilotHandoffDef, AgentHookCommandDef types
+    discovery.ts          Discovers & parses *.agent.md / *.md from .github/agents/ and ~/.copilot/agents/
+    agent-tracker.ts      Per-session tracker: active agent name
 dist/                 Build output (Bun bundler, node target)
 ```
 
@@ -26,13 +32,13 @@ dist/                 Build output (Bun bundler, node target)
 The plugin is a single async factory (`CopilotInstructionsPlugin`) that returns an OpenCode `Hooks` object. Six hooks are registered:
 
 - `experimental.chat.system.transform` — injects instructions into the system prompt before each LLM call. Repo-wide instructions are always appended; path-specific instructions only when the session's tracked files match their `applyTo` patterns.
-- `tool.execute.before` — runs `preToolUse` Copilot hooks before each tool call, blocking execution when a hook returns `"deny"` or `"ask"`.
-- `tool.execute.after` — tracks every file path accessed via `read`, `edit`, `write`, or `patch` tools for the current session. Also dispatches `postToolUse` Copilot hooks after each tool call completes.
-- `tool.definition` — keeps the `copilot_skill` tool description current (skill list can hot-reload).
-- `chat.message` — dispatches `userPromptSubmitted` Copilot hooks when a new user message is received.
-- `event` — handles `file.watcher.updated` for hot-reloading instruction/skill caches independently, and `session.deleted` to free per-session tracker memory. Also dispatches `sessionStart`, `sessionEnd`, `agentStop`, and `errorOccurred` hooks on the corresponding session lifecycle events.
+- `tool.execute.before` — runs global `preToolUse` Copilot hooks before each tool call, blocking execution when a hook returns `"deny"` or `"ask"`. If a session has an active agent, agent-scoped `preToolUse` hooks run afterward.
+- `tool.execute.after` — tracks every file path accessed via `read`, `edit`, `write`, or `patch` tools for the current session. Also dispatches `postToolUse` hooks (global then agent-scoped).
+- `tool.definition` — keeps the `copilot_skill` and `copilot_agent` tool descriptions current (lists can hot-reload).
+- `chat.message` — dispatches `userPromptSubmitted` hooks (global then agent-scoped) when a new user message is received.
+- `event` — handles `file.watcher.updated` for hot-reloading instruction/skill/agent caches independently; dispatches session lifecycle hooks (`sessionStart`, `sessionEnd`, `agentStop`, `errorOccurred`); frees per-session tracker memory on `session.deleted`.
 
-The `copilot_skill` tool is only registered when at least one skill exists at startup. Skills added after init require an OpenCode restart.
+The `copilot_skill` tool is only registered when at least one skill exists at startup. The `copilot_agent` tool is only registered when at least one agent exists at startup. Items added after init require an OpenCode restart.
 
 Hook files are loaded once at plugin init and are not hot-reloaded. Changes to hook files require an OpenCode restart.
 
@@ -47,22 +53,33 @@ Hook files are loaded once at plugin init and are not hot-reloaded. Changes to h
 | User-global skills | `~/.copilot/skills/<name>/SKILL.md` |
 | Project-local hooks | `.github/hooks/*.json` |
 | User-global hooks | `~/.copilot/hooks/*.json` |
+| Project-local agents | `.github/agents/*.agent.md` or `*.md` |
+| User-global agents | `~/.copilot/agents/*.agent.md` or `*.md` |
 
-Path-specific instruction files require an `applyTo` frontmatter field (comma-separated glob patterns). Skill `SKILL.md` files require a `description` frontmatter field. The directory name is always the canonical skill name — the optional `name` frontmatter field is advisory only.
+Path-specific instruction files require an `applyTo` frontmatter field (comma-separated glob patterns). Skill `SKILL.md` files require a `description` frontmatter field. Agent files require a `description` frontmatter field.
 
 Hook config files must have `"version": 1` at the root and a `"hooks"` object mapping hook type names to arrays of command definitions. Each command definition must have `"type": "command"` and at least one of `"bash"` or `"powershell"`.
+
+Agent files use `.agent.md` extension (or plain `.md` in the agents directory). The canonical agent name is derived from the filename (minus `.agent.md` or `.md` extension). Agents with `target: "github-copilot"` are skipped — they are cloud-only agents.
 
 ## Key invariants
 
 - Local skills shadow global skills of the same name (warning written to stderr).
+- Local agents shadow global agents of the same name (warning written to stderr).
 - `FileTracker` stores paths relative to the project root so they can be matched directly against `applyTo` patterns without prefix stripping.
-- All caches (`projectInstructions`, `globalInstructions`, `localSkills`, `globalSkills`) are module-level `let` bindings in the plugin factory — replaced atomically on hot-reload.
+- All caches (`projectInstructions`, `globalInstructions`, `localSkills`, `globalSkills`, `localAgents`, `globalAgents`) are module-level `let` bindings in the plugin factory — replaced atomically on hot-reload.
 - The plugin never throws; missing directories and unreadable files are silently skipped.
 - Project hooks run before global hooks for each hook type.
-- `HookConfirmationTracker` enables one-shot bypass of a specific `preToolUse` hook that returned `"ask"` — only the exact hook index, tool name, and args combination is bypassed, and only once per confirmation.
+- Agent-scoped hooks run after global hooks of the same type.
+- `HookConfirmationTracker` enables one-shot bypass of a specific `preToolUse` hook that returned `"ask"`. Hook keys are namespaced: `"global:<index>"` for global hooks, `"agent:<name>:<index>"` for agent-scoped hooks.
 - Only `bash` commands are supported for hooks on macOS/Linux. PowerShell-only hook definitions are silently skipped.
 - Hook execution is bounded by `timeoutSec` (default 30 seconds). A timeout in one hook does not prevent subsequent hooks from running.
 - OpenCode tool names are mapped to Copilot-equivalent names before being passed to hooks (`read` → `view`, `write` → `create`) so existing Copilot hook scripts work unmodified.
+- Agent canonical name is derived from the filename (minus `.agent.md` or `.md` extension), not a directory name.
+- Agent-scoped hooks in frontmatter use PascalCase keys (`PostToolUse`) which are normalized to camelCase (`postToolUse`) internally. The `command` field (Copilot agent format) is mapped to `bash`; both are accepted with `command` taking precedence.
+- `AgentTracker` stores the active agent name per session. Only one agent can be active per session at a time; loading a new agent replaces the previous one.
+- The `copilot_agent` tool returns agent content wrapped in `<agent_content>` XML tags, including the markdown body plus informational sections for tools, model, subagents, and handoffs.
+- Agents with `user-invocable: false` (or deprecated `infer: false`) are excluded from the `copilot_agent` tool listing but can still be loaded by name if explicitly requested.
 
 ## Dev workflow
 

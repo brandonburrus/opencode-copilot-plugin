@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/opencode-copilot-plugin)](https://www.npmjs.com/package/opencode-copilot-plugin)
 [![license](https://img.shields.io/npm/l/opencode-copilot-plugin)](./LICENSE)
 
-An [OpenCode](https://opencode.ai) plugin that brings [GitHub Copilot](https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot)'s custom instruction and skill system into OpenCode. If you already have Copilot instruction or skill files set up, they work in OpenCode with no changes.
+An [OpenCode](https://opencode.ai) plugin that brings GitHub Copilot's custom instruction, skill, hook, and agent system into OpenCode. If you already have Copilot customization files set up, they work in OpenCode with no changes.
 
 ## Install
 
@@ -79,9 +79,65 @@ Hook configuration files use the same format as [GitHub Copilot hooks](https://d
 
 **No hot-reload:** Hook files are loaded once when the plugin initialises. Changes to hook files require an OpenCode restart to take effect.
 
+### Custom agents
+
+Discovers Copilot `.agent.md` files and registers them as a `copilot_agent` tool, letting the LLM load any agent persona on demand. Agents bring their own instructions, tool lists, model preferences, and optionally agent-scoped hooks.
+
+- **Project-local** — `.github/agents/*.agent.md` (or `*.md`)
+- **User-global** — `~/.copilot/agents/*.agent.md` (or `*.md`)
+- When at least one agent exists at startup, a `copilot_agent` tool is registered.
+- Local agents shadow global agents of the same name.
+- Agents with `target: github-copilot` are skipped — they are cloud-only and cannot run locally.
+
+Agent files use the standard [Copilot custom agent format](https://code.visualstudio.com/docs/copilot/customization/custom-agents):
+
+```markdown
+---
+description: Generate an implementation plan without making code edits.
+tools: ['search/codebase', 'web/fetch']
+model: Claude Sonnet 4.5
+handoffs:
+  - label: Start Implementation
+    agent: implementer
+    prompt: Now implement the plan outlined above.
+---
+
+You are in planning mode. Collect context and produce a detailed implementation
+plan. Do not make any code edits.
+```
+
+Supported frontmatter fields:
+
+| Field | Behaviour |
+| --- | --- |
+| `description` | Required. Shown in the agent listing. |
+| `name` | Advisory. The filename (without extension) is always the canonical name. |
+| `argument-hint` | Shown as a usage hint in the tool listing. |
+| `tools` | Informational — listed in the loaded agent content. |
+| `agents` | Informational — documents which subagents the agent expects to use. |
+| `model` | Informational — noted in content with a reminder that OpenCode uses the model picker. |
+| `user-invocable` | `false` marks an agent as subagent-only; it still appears in the listing annotated as such. |
+| `infer` | Deprecated alias for `user-invocable`. |
+| `handoffs` | Rendered as a "Suggested Next Steps" section in the loaded agent content. |
+| `hooks` | Agent-scoped hooks — run after global hooks, only when this agent is active. |
+| `mcp-servers` | Not supported for local agents — field is ignored with a warning. |
+| `target: github-copilot` | Causes the agent to be skipped entirely. |
+
+**Agent-scoped hooks:** An agent file can define hooks directly in its frontmatter using the same hook types as standalone hook files. These hooks only run while that agent is active in a session, and they run after any global hooks of the same type. Hook keys use `command` instead of `bash` (both are accepted):
+
+```markdown
+---
+description: Strict formatter agent that auto-formats after every edit.
+hooks:
+  PostToolUse:
+    - type: command
+      command: ./scripts/format-changed-files.sh
+---
+```
+
 ### Hot-reload
 
-Instruction files and skill directories are re-parsed automatically when they change on disk — no OpenCode restart required. Hook files are the exception — see note above.
+Instruction files, skill directories, and agent files are re-parsed automatically when they change on disk — no OpenCode restart required. Hook files are the exception — they are loaded once at startup and require a restart to pick up changes.
 
 ## License
 
