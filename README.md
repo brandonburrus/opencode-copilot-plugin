@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/opencode-copilot-plugin)](https://www.npmjs.com/package/opencode-copilot-plugin)
 [![license](https://img.shields.io/npm/l/opencode-copilot-plugin)](./LICENSE)
 
-An [OpenCode](https://opencode.ai) plugin that brings GitHub Copilot's custom instruction, skill, hook, and agent system into OpenCode. If you already have Copilot customization files set up, they work in OpenCode with no changes.
+An [OpenCode](https://opencode.ai) plugin that brings GitHub Copilot's custom instruction, skill, hook, agent, and prompt file system into OpenCode. If you already have Copilot customization files set up, they work in OpenCode with no changes.
 
 ## Install
 
@@ -134,9 +134,52 @@ hooks:
 ---
 ```
 
+### Prompt files
+
+Discover Copilot `.prompt.md` files and surface them as slash commands. When you invoke a command matching a prompt file name, the plugin resolves its content — inlining any referenced files and substituting argument placeholders — before sending it to the LLM.
+
+- **Project-local** — `.github/prompts/*.prompt.md`
+- **User-global** — `~/.copilot/prompts/*.prompt.md`
+- Local prompts shadow global prompts of the same name.
+- Discovery is flat — only files directly inside the prompts directory are scanned (no subdirectories).
+
+Prompt files use the standard [Copilot prompt file format](https://code.visualstudio.com/docs/copilot/copilot-customization#_reusable-prompt-files-experimental):
+
+```markdown
+---
+description: Generate a pull request summary from staged changes.
+tools: ['terminal']
+---
+
+Summarise the changes in `$BRANCH` as a pull request description with a short
+title and bullet-point summary of what changed and why.
+```
+
+Supported frontmatter fields:
+
+| Field | Behaviour |
+| --- | --- |
+| `description` | Optional. Shown in the informational header prepended to the prompt. Falls back to the filename-derived name. |
+| `name` | Advisory. The filename (without `.prompt.md`) is always the canonical command name. A mismatch emits a warning. |
+| `argument-hint` | Shown as a usage hint alongside the command. |
+| `agent` | Informational — noted in the header, not enforced by OpenCode. |
+| `model` | Informational — noted in the header, not enforced by OpenCode. |
+| `tools` | Informational — noted in the header, not enforced by OpenCode. |
+
+**Arguments:** Two placeholder syntaxes are supported, and they can be mixed in the same file:
+
+| Syntax | Example | Notes |
+| --- | --- | --- |
+| VS Code style | `${input:branchName}` or `${input:branchName:main}` | The second segment is an optional placeholder hint. |
+| Copilot/Crush style | `$BRANCH_NAME` | Uppercase identifier with underscores. |
+
+Arguments are passed when invoking the command. Key/value pairs are supported (`name=value`), and a bare string is mapped to the first declared argument.
+
+**File references:** Markdown links to local files (`[label](./path/to/file.md)`) are resolved by reading the referenced file and inlining it as a `<referenced_file path="...">` XML block. Nested references are resolved recursively up to 5 levels deep. Total resolved content is capped at 100 KB; remaining references beyond the cap are left as-is.
+
 ### Hot-reload
 
-Instruction files, skill directories, and agent files are re-parsed automatically when they change on disk — no OpenCode restart required. Hook files are the exception — they are loaded once at startup and require a restart to pick up changes.
+Instruction files, skill directories, agent files, and prompt files are re-parsed automatically when they change on disk — no OpenCode restart required. Hook files are the exception — they are loaded once at startup and require a restart to pick up changes.
 
 ## License
 
