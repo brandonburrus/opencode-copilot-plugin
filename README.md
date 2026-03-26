@@ -11,8 +11,7 @@ Add the plugin to your `opencode.json`:
 
 ```json
 {
-  "$schema": "https://opencode.ai/config.json",
-  "plugin": ["opencode-copilot-plugin"]
+  "plugin": ["opencode-copilot-plugin@latest"]
 }
 ```
 
@@ -141,4 +140,4 @@ Instruction files, skill directories, and agent files are re-parsed automaticall
 
 ## License
 
-MIT © [Brandon Burrus](https://github.com/brandonburrus)
+MIT
