@@ -36,7 +36,7 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
  * - `~/.copilot/instructions/**\/*.instructions.md` — user-global path-specific
  *
  * **Skills** — registered as the `copilot_skill` tool (only when skill dirs exist):
- * - `.copilot/skills/<name>/SKILL.md` — project-local skills
+ * - `.github/skills/<name>/SKILL.md` — project-local skills
  * - `~/.copilot/skills/<name>/SKILL.md` — user-global skills
  *
  * **How it works:**

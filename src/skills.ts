@@ -13,12 +13,12 @@ export const GLOBAL_SKILLS_DIR = path.join(os.homedir(), ".copilot", "skills")
  * The subdirectory path (relative to the project root) where project-level skills live.
  * Resolved to an absolute path in `discoverLocalSkills`.
  */
-export const LOCAL_SKILLS_SUBDIR = path.join(".copilot", "skills")
+export const LOCAL_SKILLS_SUBDIR = path.join(".github", "skills")
 
 /**
  * A single Copilot skill loaded from a `<name>/SKILL.md` file.
  *
- * - `scope: "local"`  — from `<rootDir>/.copilot/skills/<name>/SKILL.md`
+ * - `scope: "local"`  — from `<rootDir>/.github/skills/<name>/SKILL.md`
  * - `scope: "global"` — from `~/.copilot/skills/<name>/SKILL.md`
  */
 export interface CopilotSkill {
@@ -47,7 +47,7 @@ export async function discoverSkills(rootDir: string): Promise<CopilotSkill[]> {
 }
 
 /**
- * Discovers skills from `<rootDir>/.copilot/skills/`.
+ * Discovers skills from `<rootDir>/.github/skills/`.
  * Returns an empty array if the directory does not exist.
  */
 export async function discoverLocalSkills(rootDir: string): Promise<CopilotSkill[]> {
