@@ -98,6 +98,7 @@ Prompt files use the `.prompt.md` extension. The canonical prompt name is derive
 - Prompt argument substitution supports two syntaxes: VS Code style `${input:varName}` / `${input:varName:placeholder}` and Copilot/Crush style `$VAR_NAME` (uppercase with underscores). Unmatched placeholders are left as-is.
 - `parseCommandArguments` handles both `key=value` pairs (with quoted-value support) and positional strings (mapped to the first declared argument).
 - The `command.execute.before` hook matches commands by their base name (scope prefix and `:` path separators stripped). Unsupported frontmatter fields (`agent`, `model`, `tools`) are surfaced as informational notes in the prepended header but are not enforced.
+- Instructions with `applyTo` pattern `**` or `**/*` are treated as universally applicable and injected on every LLM turn regardless of whether any files have been tracked in the session.
 
 ## Dev workflow
 
