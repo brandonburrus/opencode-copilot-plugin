@@ -3,6 +3,7 @@ import * as os from "node:os"
 import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import type { CopilotPrompt, CopilotPromptFrontmatter, PromptArgument } from "./types.ts"
+import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
 
 /**
  * The subdirectory path (relative to the project root) where project-level prompt files live.
@@ -25,13 +26,31 @@ export async function discoverLocalPrompts(rootDir: string): Promise<CopilotProm
 }
 
 /**
- * Discovers prompt files from `~/.copilot/prompts/`.
+ * Discovers prompt files from `globalDir` (defaults to `~/.copilot/prompts/`).
  * Returns an empty array if the directory does not exist.
  */
 export async function discoverGlobalPrompts(
   globalDir: string = GLOBAL_PROMPTS_DIR,
 ): Promise<CopilotPrompt[]> {
   return collectPromptFiles(globalDir, "global")
+}
+
+/**
+ * Discovers prompt files from the VS Code user data directories.
+ *
+ * Scans `<vsCodeUserDataDir>/prompts/` for both the stable and Insiders variants
+ * of VS Code on the current platform. This is where VS Code stores user-level
+ * prompt files created via the Chat Customizations editor or the
+ * "Chat: New Prompt File" command.
+ *
+ * Returns an empty array if none of those directories exist.
+ */
+export async function discoverVSCodePrompts(): Promise<CopilotPrompt[]> {
+  const userDataDirs = await getVSCodeUserDataDirs()
+  const results = await Promise.all(
+    userDataDirs.map((base) => collectPromptFiles(path.join(base, "prompts"), "global")),
+  )
+  return results.flat()
 }
 
 /**

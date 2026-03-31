@@ -7,6 +7,7 @@ import { matchesApplyTo } from './src/glob-matcher.ts';
 import {
   discoverGlobalInstructions,
   discoverInstructions,
+  discoverVSCodeInstructions,
   GLOBAL_INSTRUCTIONS_DIR,
   type Instruction,
   type PathSpecificInstruction,
@@ -16,6 +17,7 @@ import {
   type CopilotSkill,
   discoverGlobalSkills,
   discoverLocalSkills,
+  discoverVSCodeSkills,
   GLOBAL_SKILLS_DIR,
   LOCAL_SKILLS_SUBDIR,
   mergeSkills,
@@ -32,6 +34,7 @@ import {
   AgentTracker,
   discoverGlobalAgents,
   discoverLocalAgents,
+  discoverVSCodeAgents,
   type CopilotAgent,
   GLOBAL_AGENTS_DIR,
   LOCAL_AGENTS_SUBDIR,
@@ -42,6 +45,7 @@ import {
   type CopilotPrompt,
   discoverGlobalPrompts,
   discoverLocalPrompts,
+  discoverVSCodePrompts,
   formatPromptHeader,
   GLOBAL_PROMPTS_DIR,
   LOCAL_PROMPTS_SUBDIR,
@@ -50,6 +54,7 @@ import {
   resolveFileReferences,
   substituteArguments,
 } from './src/prompts/index.ts';
+import { getVSCodeUserDataDirs } from './src/vscode-paths.ts';
 
 /**
  * Tool names whose args include a `filePath` field.
@@ -58,7 +63,7 @@ import {
 const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
 
 /**
- * Mirrors GitHub Copilot's custom instruction, skill, hooks, agent, and prompt
+ * Mirrors GitHub Copilot's custom instruction, prompt, skill, agent, and hook
  * file system into OpenCode.
  *
  * **Custom instructions** — injected into the system prompt:
@@ -66,34 +71,39 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
  * - `.github/instructions/**\/*.instructions.md` — path-specific, injected when tracked
  *   files match the instruction's `applyTo` glob patterns
  * - `~/.copilot/instructions/**\/*.instructions.md` — user-global path-specific
- *
- * **Skills** — registered as the `copilot_skill` tool (only when skill dirs exist):
- * - `.github/skills/<name>/SKILL.md` — project-local skills
- * - `~/.copilot/skills/<name>/SKILL.md` — user-global skills
- *
- * **Hooks** — executes Copilot hook scripts at key agent lifecycle points:
- * - `.github/hooks/*.json` — project-local hooks
- * - `~/.copilot/hooks/*.json` — user-global hooks (run after project hooks)
- * Hook files are loaded once at plugin init; changes require an OpenCode restart.
- *
- * **Agents** — registered as the `copilot_agent` tool (only when agent files exist):
- * - `.github/agents/*.agent.md` or `*.md` — project-local agents
- * - `~/.copilot/agents/*.agent.md` or `*.md` — user-global agents
- * Agents can also define scoped hooks that run only when the agent is active.
+ * - `<vsCodeUserData>/instructions/**\/*.instructions.md` — VS Code user data (secondary)
  *
  * **Prompt files** — surfaced as slash commands via `command.execute.before`:
  * - `.github/prompts/*.prompt.md` — project-local prompt files
  * - `~/.copilot/prompts/*.prompt.md` — user-global prompt files
+ * - `<vsCodeUserData>/prompts/*.prompt.md` — VS Code user data (secondary)
  * When a command matching a prompt file name is invoked, its content is
  * resolved (including file references) and substituted with any provided
  * arguments before being sent to the LLM.
  *
+ * **Skills** — registered as the `copilot_skill` tool (only when skill dirs exist):
+ * - `.github/skills/<name>/SKILL.md` — project-local skills
+ * - `~/.copilot/skills/<name>/SKILL.md` — user-global skills
+ * - `<vsCodeUserData>/skills/<name>/SKILL.md` — VS Code user data (secondary)
+ *
+ * **Agents** — registered as the `copilot_agent` tool (only when agent files exist):
+ * - `.github/agents/*.agent.md` or `*.md` — project-local agents
+ * - `~/.copilot/agents/*.agent.md` or `*.md` — user-global agents
+ * - `<vsCodeUserData>/agents/*.agent.md` or `*.md` — VS Code user data (secondary)
+ * Agents can also define scoped hooks that run only when the agent is active.
+ *
+ * **Hooks** — executes Copilot hook scripts at key agent lifecycle points:
+ * - `.github/hooks/*.json` — project-local hooks
+ * - `~/.copilot/hooks/*.json` — user-global hooks (run after project hooks)
+ * - `<vsCodeUserData>/hooks/*.json` — VS Code user data (run last)
+ * Hook files are loaded once at plugin init; changes require an OpenCode restart.
+ *
  * **How it works:**
- * 1. On init, all caches (instructions, skills, hooks, agents, prompts) are discovered and stored.
+ * 1. On init, all caches (instructions, prompts, skills, agents, hooks) are discovered and stored.
  * 2. `tool.execute.after` tracks which files the LLM has accessed, feeding `applyTo` matching.
  * 3. `experimental.chat.system.transform` injects instructions before each LLM call.
  * 4. `tool.definition` keeps the `copilot_skill` and `copilot_agent` tool descriptions current.
- * 5. `event` watches for instruction/skill/agent/prompt file changes to hot-reload caches
+ * 5. `event` watches for instruction/prompt/skill/agent file changes to hot-reload caches
  *    independently, and frees per-session tracking data when sessions are deleted.
  * 6. `tool.execute.before` runs global `preToolUse` hooks, then agent-scoped ones if active.
  * 7. `chat.message` runs `userPromptSubmitted` hooks (global then agent-scoped).
@@ -109,14 +119,26 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
   /** Project-level instruction cache — replaced on hot-reload. */
   let projectInstructions: Instruction[] = await discoverInstructions(rootDir);
 
-  /** User-global instruction cache — replaced on hot-reload. */
-  let globalInstructions: PathSpecificInstruction[] = await discoverGlobalInstructions();
+  /**
+   * User-global instruction cache — combines `~/.copilot/instructions/` (primary)
+   * with VS Code user data instructions (secondary). Replaced on hot-reload.
+   */
+  let globalInstructions: PathSpecificInstruction[] = [
+    ...await discoverGlobalInstructions(),
+    ...await discoverVSCodeInstructions(),
+  ];
 
   /** Project-local skill cache — replaced on hot-reload. */
   let localSkills: CopilotSkill[] = await discoverLocalSkills(rootDir);
 
-  /** User-global skill cache — replaced on hot-reload. */
-  let globalSkills: CopilotSkill[] = await discoverGlobalSkills();
+  /**
+   * User-global skill cache — `~/.copilot/skills/` merged with VS Code user data skills
+   * (`~/.copilot/` takes precedence). Replaced on hot-reload.
+   */
+  let globalSkills: CopilotSkill[] = mergeSkills(
+    await discoverGlobalSkills(),
+    await discoverVSCodeSkills(),
+  );
 
   /** Merged, deduplicated skill list. Local skills take precedence over global. */
   let allSkills: CopilotSkill[] = mergeSkills(localSkills, globalSkills);
@@ -130,8 +152,14 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
   /** Project-local agent cache — replaced on hot-reload. */
   let localAgents: CopilotAgent[] = await discoverLocalAgents(rootDir);
 
-  /** User-global agent cache — replaced on hot-reload. */
-  let globalAgents: CopilotAgent[] = await discoverGlobalAgents();
+  /**
+   * User-global agent cache — `~/.copilot/agents/` merged with VS Code user data agents
+   * (`~/.copilot/` takes precedence). Replaced on hot-reload.
+   */
+  let globalAgents: CopilotAgent[] = mergeAgents(
+    await discoverGlobalAgents(),
+    await discoverVSCodeAgents(),
+  );
 
   /** Merged, deduplicated agent list. Local agents take precedence over global. */
   let allAgents: CopilotAgent[] = mergeAgents(localAgents, globalAgents);
@@ -139,8 +167,14 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
   /** Project-local prompt cache — replaced on hot-reload. */
   let localPrompts: CopilotPrompt[] = await discoverLocalPrompts(rootDir);
 
-  /** User-global prompt cache — replaced on hot-reload. */
-  let globalPrompts: CopilotPrompt[] = await discoverGlobalPrompts();
+  /**
+   * User-global prompt cache — `~/.copilot/prompts/` merged with VS Code user data prompts
+   * (`~/.copilot/` takes precedence). Replaced on hot-reload.
+   */
+  let globalPrompts: CopilotPrompt[] = mergePrompts(
+    await discoverGlobalPrompts(),
+    await discoverVSCodePrompts(),
+  );
 
   /** Merged, deduplicated prompt list. Local prompts take precedence over global. */
   let allPrompts: CopilotPrompt[] = mergePrompts(localPrompts, globalPrompts);
@@ -153,6 +187,12 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
 
   /** Absolute path of the project-level prompts directory — used for hot-reload path matching. */
   const localPromptsDir = path.join(rootDir, LOCAL_PROMPTS_SUBDIR);
+
+  /**
+   * VS Code user data base directories — used for hot-reload path matching.
+   * Resolved once at init; changes to the VS Code installation require an OpenCode restart.
+   */
+  const vsCodeUserDataDirs = await getVSCodeUserDataDirs();
 
   await log(
     client,
@@ -423,13 +463,24 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         const isProjectInstruction =
           changedPath.includes('.github/copilot-instructions.md') || changedPath.includes('.github/instructions/');
 
-        const isGlobalInstruction = changedPath.startsWith(GLOBAL_INSTRUCTIONS_DIR);
+        const isGlobalInstruction =
+          changedPath.startsWith(GLOBAL_INSTRUCTIONS_DIR) ||
+          vsCodeUserDataDirs.some((d) => changedPath.startsWith(path.join(d, 'instructions')));
+
         const isLocalSkill = changedPath.startsWith(localSkillsDir);
-        const isGlobalSkill = changedPath.startsWith(GLOBAL_SKILLS_DIR);
+        const isGlobalSkill =
+          changedPath.startsWith(GLOBAL_SKILLS_DIR) ||
+          vsCodeUserDataDirs.some((d) => changedPath.startsWith(path.join(d, 'skills')));
+
         const isLocalAgent = changedPath.startsWith(localAgentsDir);
-        const isGlobalAgent = changedPath.startsWith(GLOBAL_AGENTS_DIR);
+        const isGlobalAgent =
+          changedPath.startsWith(GLOBAL_AGENTS_DIR) ||
+          vsCodeUserDataDirs.some((d) => changedPath.startsWith(path.join(d, 'agents')));
+
         const isLocalPrompt = changedPath.startsWith(localPromptsDir);
-        const isGlobalPrompt = changedPath.startsWith(GLOBAL_PROMPTS_DIR);
+        const isGlobalPrompt =
+          changedPath.startsWith(GLOBAL_PROMPTS_DIR) ||
+          vsCodeUserDataDirs.some((d) => changedPath.startsWith(path.join(d, 'prompts')));
 
         if (isProjectInstruction) {
           projectInstructions = await discoverInstructions(rootDir);
@@ -441,7 +492,10 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         }
 
         if (isGlobalInstruction) {
-          globalInstructions = await discoverGlobalInstructions();
+          globalInstructions = [
+            ...await discoverGlobalInstructions(),
+            ...await discoverVSCodeInstructions(),
+          ];
           await log(
             client,
             'info',
@@ -456,7 +510,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         }
 
         if (isGlobalSkill) {
-          globalSkills = await discoverGlobalSkills();
+          globalSkills = mergeSkills(await discoverGlobalSkills(), await discoverVSCodeSkills());
           allSkills = mergeSkills(localSkills, globalSkills);
           await log(client, 'info', `Hot-reloaded ${allSkills.length} skill(s) after change to ${changedPath}`);
         }
@@ -472,7 +526,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         }
 
         if (isGlobalAgent) {
-          globalAgents = await discoverGlobalAgents();
+          globalAgents = mergeAgents(await discoverGlobalAgents(), await discoverVSCodeAgents());
           allAgents = mergeAgents(localAgents, globalAgents);
           await log(
             client,
@@ -492,7 +546,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         }
 
         if (isGlobalPrompt) {
-          globalPrompts = await discoverGlobalPrompts();
+          globalPrompts = mergePrompts(await discoverGlobalPrompts(), await discoverVSCodePrompts());
           allPrompts = mergePrompts(localPrompts, globalPrompts);
           await log(
             client,

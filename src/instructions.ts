@@ -2,9 +2,10 @@ import * as path from "node:path"
 import * as os from "node:os"
 import * as fs from "node:fs/promises"
 import matter from "gray-matter"
+import { getVSCodeUserDataDirs } from "./vscode-paths.ts"
 
 /**
- * The default directory where VS Code Copilot stores user-level instruction files.
+ * The default directory where GitHub Copilot CLI stores user-level instruction files.
  * These apply across all workspaces, unlike project-level instructions in `.github/`.
  */
 export const GLOBAL_INSTRUCTIONS_DIR = path.join(os.homedir(), ".copilot", "instructions")
@@ -107,6 +108,21 @@ export async function discoverGlobalInstructions(
   globalDir: string = GLOBAL_INSTRUCTIONS_DIR,
 ): Promise<PathSpecificInstruction[]> {
   return collectInstructionFiles(globalDir, "global")
+}
+
+/**
+ * Discovers instruction files from the VS Code user data directories.
+ *
+ * Scans `<vsCodeUserDataDir>/instructions/` for both the stable and Insiders
+ * variants of VS Code on the current platform. Returns an empty array if none
+ * of those directories exist.
+ */
+export async function discoverVSCodeInstructions(): Promise<PathSpecificInstruction[]> {
+  const userDataDirs = await getVSCodeUserDataDirs()
+  const results = await Promise.all(
+    userDataDirs.map((base) => collectInstructionFiles(path.join(base, "instructions"), "global")),
+  )
+  return results.flat()
 }
 
 /**

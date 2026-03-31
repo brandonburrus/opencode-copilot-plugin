@@ -1,35 +1,36 @@
-This is **opencode-copilot-plugin** — a TypeScript/Bun OpenCode plugin that mirrors GitHub Copilot's custom instruction, skill, hooks, agent, and prompt file system into OpenCode sessions.
+This is **opencode-copilot-plugin** — a TypeScript/Bun OpenCode plugin that mirrors GitHub Copilot's custom instruction, prompt, skill, agent, and hook file system into OpenCode sessions.
 
 ## Project layout
 
 ```
 index.ts              Plugin entry point — wires hooks, manages caches, registers tools
 src/
+  vscode-paths.ts     Resolves VS Code user data directories (macOS + Linux, stable + Insiders)
   instructions.ts     Discovers & parses .github/copilot-instructions.md and *.instructions.md files
-  skills.ts           Discovers & parses SKILL.md files from .github/skills/ and ~/.copilot/skills/
-  skill-tool.ts       Builds the copilot_skill tool definition and its XML description block
-  agent-tool.ts       Builds the copilot_agent tool definition and its XML description block
   format.ts           Formats a parsed Instruction into a system-prompt string
   glob-matcher.ts     applyTo glob matching via picomatch
   file-tracker.ts     Per-session file access tracker with FIFO eviction (max 500 paths)
-  hooks/
-    index.ts              Barrel re-export for the hooks subsystem
-    types.ts              CopilotHookType, HookCommandDef, HookConfigFile, HookRegistry types
-    discovery.ts          Discovers & parses *.json hook configs from .github/hooks/ and ~/.copilot/hooks/
-    executor.ts           Executes hook commands by piping JSON to stdin; handles timeouts
-    confirmation-tracker.ts  Tracks "ask" decisions from preToolUse hooks for one-shot bypass
-    tool-names.ts         Maps OpenCode tool names to Copilot-equivalent names
-  agents/
-    index.ts              Barrel re-export for the agents subsystem
-    types.ts              CopilotAgent, CopilotAgentFrontmatter, CopilotHandoffDef, AgentHookCommandDef types
-    discovery.ts          Discovers & parses *.agent.md / *.md from .github/agents/ and ~/.copilot/agents/
-    agent-tracker.ts      Per-session tracker: active agent name
   prompts/
     index.ts              Barrel re-export for the prompts subsystem
     types.ts              CopilotPrompt, CopilotPromptFrontmatter, PromptArgument types
-    discovery.ts          Discovers & parses *.prompt.md from .github/prompts/ and ~/.copilot/prompts/; extractArguments, substituteArguments
+    discovery.ts          Discovers & parses *.prompt.md from .github/prompts/, ~/.copilot/prompts/, and VS Code user data prompts/; extractArguments, substituteArguments
     resolve-references.ts Resolves markdown file references ([file.md](../path)) and inlines them as <referenced_file> XML blocks
     format.ts             formatPromptHeader (informational header with unsupported-field notes), parseCommandArguments
+  skills.ts           Discovers & parses SKILL.md files from .github/skills/ and ~/.copilot/skills/
+  skill-tool.ts       Builds the copilot_skill tool definition and its XML description block
+  agents/
+    index.ts              Barrel re-export for the agents subsystem
+    types.ts              CopilotAgent, CopilotAgentFrontmatter, CopilotHandoffDef, AgentHookCommandDef types
+    discovery.ts          Discovers & parses *.agent.md / *.md from .github/agents/, ~/.copilot/agents/, and VS Code user data agents/
+    agent-tracker.ts      Per-session tracker: active agent name
+  agent-tool.ts       Builds the copilot_agent tool definition and its XML description block
+  hooks/
+    index.ts              Barrel re-export for the hooks subsystem
+    types.ts              CopilotHookType, HookCommandDef, HookConfigFile, HookRegistry types
+    discovery.ts          Discovers & parses *.json hook configs from .github/hooks/, ~/.copilot/hooks/, and VS Code user data hooks/
+    executor.ts           Executes hook commands by piping JSON to stdin; handles timeouts
+    confirmation-tracker.ts  Tracks "ask" decisions from preToolUse hooks for one-shot bypass
+    tool-names.ts         Maps OpenCode tool names to Copilot-equivalent names
 dist/                 Build output (Bun bundler, node target)
 ```
 
@@ -43,7 +44,7 @@ The plugin is a single async factory (`CopilotInstructionsPlugin`) that returns 
 - `tool.definition` — keeps the `copilot_skill` and `copilot_agent` tool descriptions current (lists can hot-reload).
 - `chat.message` — dispatches `userPromptSubmitted` hooks (global then agent-scoped) when a new user message is received.
 - `command.execute.before` — intercepts slash command execution; when the command name matches a known prompt, resolves markdown file references, substitutes argument placeholders, prepends an informational header, and replaces `output.parts` with the fully resolved prompt content.
-- `event` — handles `file.watcher.updated` for hot-reloading instruction/skill/agent/prompt caches independently; dispatches session lifecycle hooks (`sessionStart`, `sessionEnd`, `agentStop`, `errorOccurred`); frees per-session tracker memory on `session.deleted`.
+- `event` — handles `file.watcher.updated` for hot-reloading instruction/prompt/skill/agent caches independently; dispatches session lifecycle hooks (`sessionStart`, `sessionEnd`, `agentStop`, `errorOccurred`); frees per-session tracker memory on `session.deleted`.
 
 The `copilot_skill` tool is only registered when at least one skill exists at startup. The `copilot_agent` tool is only registered when at least one agent exists at startup. Items added after init require an OpenCode restart.
 
@@ -55,15 +56,26 @@ Hook files are loaded once at plugin init and are not hot-reloaded. Changes to h
 |---|---|
 | Repo-wide instructions | `.github/copilot-instructions.md` |
 | Project path-specific instructions | `.github/instructions/**/*.instructions.md` |
-| Global path-specific instructions | `~/.copilot/instructions/**/*.instructions.md` |
-| Project-local skills | `.github/skills/<name>/SKILL.md` |
-| User-global skills | `~/.copilot/skills/<name>/SKILL.md` |
-| Project-local hooks | `.github/hooks/*.json` |
-| User-global hooks | `~/.copilot/hooks/*.json` |
-| Project-local agents | `.github/agents/*.agent.md` or `*.md` |
-| User-global agents | `~/.copilot/agents/*.agent.md` or `*.md` |
+| Global path-specific instructions (primary) | `~/.copilot/instructions/**/*.instructions.md` |
+| Global path-specific instructions (secondary) | `<vsCodeUserData>/instructions/**/*.instructions.md` |
 | Project-local prompts | `.github/prompts/*.prompt.md` |
-| User-global prompts | `~/.copilot/prompts/*.prompt.md` |
+| User-global prompts (primary) | `~/.copilot/prompts/*.prompt.md` |
+| User-global prompts (secondary) | `<vsCodeUserData>/prompts/*.prompt.md` |
+| Project-local skills | `.github/skills/<name>/SKILL.md` |
+| User-global skills (primary) | `~/.copilot/skills/<name>/SKILL.md` |
+| User-global skills (secondary) | `<vsCodeUserData>/skills/<name>/SKILL.md` |
+| Project-local agents | `.github/agents/*.agent.md` or `*.md` |
+| User-global agents (primary) | `~/.copilot/agents/*.agent.md` or `*.md` |
+| User-global agents (secondary) | `<vsCodeUserData>/agents/*.agent.md` or `*.md` |
+| Project-local hooks | `.github/hooks/*.json` |
+| User-global hooks (primary) | `~/.copilot/hooks/*.json` |
+| User-global hooks (secondary) | `<vsCodeUserData>/hooks/*.json` |
+
+`<vsCodeUserData>` resolves to the VS Code user data directory for the current platform:
+- macOS: `~/Library/Application Support/Code/User` and `~/Library/Application Support/Code - Insiders/User`
+- Linux: `~/.config/Code/User` and `~/.config/Code - Insiders/User`
+
+Both VS Code stable and Insiders are checked. Only directories that exist on disk are scanned.
 
 Path-specific instruction files require an `applyTo` frontmatter field (comma-separated glob patterns). Skill `SKILL.md` files require a `description` frontmatter field. Agent files require a `description` frontmatter field.
 
@@ -78,6 +90,9 @@ Prompt files use the `.prompt.md` extension. The canonical prompt name is derive
 - Local skills shadow global skills of the same name (warning written to stderr).
 - Local agents shadow global agents of the same name (warning written to stderr).
 - Local prompts shadow global prompts of the same name (warning written to stderr).
+- For skills, agents, and prompts: `~/.copilot/` items shadow same-named VS Code user data items (warning written to stderr). The full precedence order is: project-local > `~/.copilot/` > VS Code user data.
+- For hooks: execution order per hook type is project hooks → `~/.copilot/` hooks → VS Code user data hooks.
+- `getVSCodeUserDataDirs()` in `src/vscode-paths.ts` resolves VS Code user data base directories. Only directories that exist on disk are returned. Unsupported platforms (Windows) return an empty array.
 - `FileTracker` stores paths relative to the project root so they can be matched directly against `applyTo` patterns without prefix stripping.
 - All caches (`projectInstructions`, `globalInstructions`, `localSkills`, `globalSkills`, `localAgents`, `globalAgents`, `localPrompts`, `globalPrompts`) are module-level `let` bindings in the plugin factory — replaced atomically on hot-reload.
 - The plugin never throws; missing directories and unreadable files are silently skipped.

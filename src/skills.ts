@@ -2,6 +2,7 @@ import * as path from "node:path"
 import * as os from "node:os"
 import * as fs from "node:fs/promises"
 import matter from "gray-matter"
+import { getVSCodeUserDataDirs } from "./vscode-paths.ts"
 
 /**
  * The default directory where GitHub Copilot stores user-level skill files.
@@ -62,6 +63,21 @@ export async function discoverGlobalSkills(
   globalDir: string = GLOBAL_SKILLS_DIR,
 ): Promise<CopilotSkill[]> {
   return collectSkillDirs(globalDir, "global")
+}
+
+/**
+ * Discovers skills from the VS Code user data directories.
+ *
+ * Scans `<vsCodeUserDataDir>/skills/` for both the stable and Insiders variants
+ * of VS Code on the current platform. Returns an empty array if none of those
+ * directories exist.
+ */
+export async function discoverVSCodeSkills(): Promise<CopilotSkill[]> {
+  const userDataDirs = await getVSCodeUserDataDirs()
+  const results = await Promise.all(
+    userDataDirs.map((base) => collectSkillDirs(path.join(base, "skills"), "global")),
+  )
+  return results.flat()
 }
 
 /**

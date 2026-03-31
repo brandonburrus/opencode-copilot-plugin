@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import type { HookCommandDef, HookRegistry } from "../hooks/types.ts"
 import type { AgentHookCommandDef, CopilotAgent, CopilotAgentFrontmatter } from "./types.ts"
+import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
 
 /** Subdirectory (relative to project root) for agent files. */
 export const LOCAL_AGENTS_SUBDIR = path.join(".github", "agents")
@@ -27,6 +28,21 @@ export async function discoverGlobalAgents(
   globalDir: string = GLOBAL_AGENTS_DIR,
 ): Promise<CopilotAgent[]> {
   return collectAgentFiles(globalDir, "global")
+}
+
+/**
+ * Discovers agent files from the VS Code user data directories.
+ *
+ * Scans `<vsCodeUserDataDir>/agents/` for both the stable and Insiders variants
+ * of VS Code on the current platform. Returns an empty array if none of those
+ * directories exist.
+ */
+export async function discoverVSCodeAgents(): Promise<CopilotAgent[]> {
+  const userDataDirs = await getVSCodeUserDataDirs()
+  const results = await Promise.all(
+    userDataDirs.map((base) => collectAgentFiles(path.join(base, "agents"), "global")),
+  )
+  return results.flat()
 }
 
 /**
