@@ -11,7 +11,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "commands"
   ],
   "scripts": {
     "build": "bun build index.ts --outdir dist --target node --external @opencode-ai/plugin --external gray-matter --external picomatch",

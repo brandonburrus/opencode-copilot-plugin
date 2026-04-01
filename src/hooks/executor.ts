@@ -1,6 +1,7 @@
 import * as path from "node:path"
 import { spawn } from "node:child_process"
 import type { CopilotHookType, HookCommandDef, HookRegistry } from "./types.ts"
+import { pluginLog } from "../log.ts"
 
 const DEFAULT_TIMEOUT_SEC = 30
 
@@ -57,7 +58,7 @@ export async function executeHookCommand(
       settled = true
       child.kill()
       const message = `Hook timed out after ${def.timeoutSec ?? DEFAULT_TIMEOUT_SEC}s`
-      process.stderr.write(`[opencode-copilot-plugin] Hook execution error: ${message}\n`)
+      pluginLog("warn", `Hook execution error: ${message}`)
       resolve({ stdout: "", exitCode: 1 })
     }, timeoutMs)
 
@@ -68,7 +69,7 @@ export async function executeHookCommand(
 
       const stderr = Buffer.concat(stderrChunks).toString("utf8")
       if (stderr.length > 0) {
-        process.stderr.write(`[opencode-copilot-plugin] Hook stderr: ${stderr.trimEnd()}\n`)
+        pluginLog("warn", `Hook stderr: ${stderr.trimEnd()}`)
       }
 
       resolve({ stdout: Buffer.concat(stdoutChunks).toString("utf8"), exitCode: code ?? 1 })
@@ -78,7 +79,7 @@ export async function executeHookCommand(
       if (settled) return
       settled = true
       clearTimeout(timer)
-      process.stderr.write(`[opencode-copilot-plugin] Hook execution error: ${err.message}\n`)
+      pluginLog("error", `Hook execution error: ${err.message}`)
       resolve({ stdout: "", exitCode: 1 })
     })
   })

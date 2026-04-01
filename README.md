@@ -70,6 +70,25 @@ Arguments are passed when invoking the command. Key/value pairs are supported (`
 
 **File references:** Markdown links to local files (`[label](./path/to/file.md)`) are resolved by reading the referenced file and inlining it as a `<referenced_file path="...">` XML block. Nested references are resolved recursively up to 5 levels deep. Total resolved content is capped at 100 KB; remaining references beyond the cap are left as-is.
 
+### Slash commands
+
+The plugin registers two slash commands in OpenCode's command picker by symlinking stub files into `~/.config/opencode/commands/` at startup:
+
+| Command | Description |
+| --- | --- |
+| `/copilot-inspect` | Displays a full report of all loaded instructions, skills, agents, prompts, hooks, and current session state. |
+| `/copilot-prompt` | Lists all available Copilot prompt files, or resolves and runs one by name with argument substitution. |
+
+Each symlink points back to the plugin's install location (`~/.cache/opencode/node_modules/opencode-copilot-plugin/commands/`), so the source of the command file is clear. If a file named `copilot-inspect.md` or `copilot-prompt.md` already exists as a regular (non-symlink) file in `~/.config/opencode/commands/`, the plugin will not overwrite it.
+
+**Removing symlinks:** If you uninstall the plugin, remove the symlinks manually:
+```bash
+rm ~/.config/opencode/commands/copilot-inspect.md
+rm ~/.config/opencode/commands/copilot-prompt.md
+```
+
+Both commands are also registered as tools (`copilot_prompt` and `copilot_inspect`) so the LLM can invoke them directly without a slash command.
+
 ### Skills
 
 - **Project-local** — `.github/skills/<name>/SKILL.md`

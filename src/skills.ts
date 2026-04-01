@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import { getVSCodeUserDataDirs } from "./vscode-paths.ts"
 import { entryIsDirectory } from "./fs-utils.ts"
+import { pluginLog } from "./log.ts"
 
 /**
  * The default directory where GitHub Copilot stores user-level skill files.
@@ -91,9 +92,7 @@ export function mergeSkills(local: CopilotSkill[], global: CopilotSkill[]): Copi
 
   const filteredGlobal = global.filter((s) => {
     if (localNames.has(s.name)) {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Skipping global skill "${s.name}": overridden by a local skill with the same name\n`,
-      )
+      pluginLog("warn", `Skipping global skill "${s.name}": overridden by a local skill with the same name`)
       return false
     }
     return true
@@ -154,18 +153,14 @@ async function parseSkillDir(
   const { data: frontmatter, content } = matter(raw)
 
   if (!frontmatter["description"] || typeof frontmatter["description"] !== "string") {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Skipping ${filePath}: missing or invalid "description" frontmatter field\n`,
-    )
+    pluginLog("warn", `Skipping ${filePath}: missing or invalid "description" frontmatter field`)
     return null
   }
 
   const dirName = path.basename(dirPath)
   const fmName = frontmatter["name"]
   if (typeof fmName === "string" && fmName !== dirName) {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Warning: "name" in ${filePath} is "${fmName}" but directory is "${dirName}". Using directory name as canonical name.\n`,
-    )
+    pluginLog("warn", `Warning: "name" in ${filePath} is "${fmName}" but directory is "${dirName}". Using directory name as canonical name.`)
   }
 
   return {

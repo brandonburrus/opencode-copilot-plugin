@@ -6,6 +6,7 @@ import type { HookCommandDef, HookRegistry } from "../hooks/types.ts"
 import type { AgentHookCommandDef, CopilotAgent, CopilotAgentFrontmatter } from "./types.ts"
 import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
 import { entryIsFile } from "../fs-utils.ts"
+import { pluginLog } from "../log.ts"
 
 /** Subdirectory (relative to project root) for agent files. */
 export const LOCAL_AGENTS_SUBDIR = path.join(".github", "agents")
@@ -56,9 +57,7 @@ export function mergeAgents(primary: CopilotAgent[], secondary: CopilotAgent[]):
 
   const filteredSecondary = secondary.filter((a) => {
     if (primaryNames.has(a.name)) {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Skipping agent "${a.name}" from ${a.filePath}: overridden by an agent with the same name\n`,
-      )
+      pluginLog("warn", `Skipping agent "${a.name}" from ${a.filePath}: overridden by an agent with the same name`)
       return false
     }
     return true
@@ -125,31 +124,23 @@ async function parseAgentFile(
   const fm = frontmatter as CopilotAgentFrontmatter
 
   if (!fm.description || typeof fm.description !== "string") {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Skipping ${filePath}: missing or invalid "description" frontmatter field\n`,
-    )
+    pluginLog("warn", `Skipping ${filePath}: missing or invalid "description" frontmatter field`)
     return null
   }
 
   if (fm.target === "github-copilot") {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Skipping ${filePath}: target "github-copilot" is a cloud-only agent and cannot run locally\n`,
-    )
+    pluginLog("warn", `Skipping ${filePath}: target "github-copilot" is a cloud-only agent and cannot run locally`)
     return null
   }
 
   if (Array.isArray(fm["mcp-servers"]) && fm["mcp-servers"].length > 0) {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Warning: ${filePath} defines "mcp-servers" which is not supported for local agents — field will be ignored\n`,
-    )
+    pluginLog("warn", `Warning: ${filePath} defines "mcp-servers" which is not supported for local agents — field will be ignored`)
   }
 
   const name = deriveAgentName(path.basename(filePath))
   const fmName = fm.name
   if (typeof fmName === "string" && fmName !== name) {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Warning: "name" in ${filePath} is "${fmName}" but filename-derived name is "${name}". Using filename-derived name as canonical name.\n`,
-    )
+    pluginLog("warn", `Warning: "name" in ${filePath} is "${fmName}" but filename-derived name is "${name}". Using filename-derived name as canonical name.`)
   }
 
   const userInvocable = resolveUserInvocable(fm)

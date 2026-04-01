@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises"
 import type { CopilotHookType, HookCommandDef, HookConfigFile, HookRegistry } from "./types.ts"
 import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
 import { entryIsFile } from "../fs-utils.ts"
+import { pluginLog } from "../log.ts"
 
 export const LOCAL_HOOKS_SUBDIR = path.join(".github", "hooks")
 export const GLOBAL_HOOKS_DIR = path.join(os.homedir(), ".copilot", "hooks")
@@ -69,26 +70,24 @@ async function parseHookFile(filePath: string): Promise<HookRegistry | null> {
   try {
     parsed = JSON.parse(raw)
   } catch {
-    process.stderr.write(`[opencode-copilot-plugin] Skipping ${filePath}: invalid JSON\n`)
+    pluginLog("warn", `Skipping ${filePath}: invalid JSON`)
     return null
   }
 
   if (typeof parsed !== "object" || parsed === null) {
-    process.stderr.write(`[opencode-copilot-plugin] Skipping ${filePath}: root value must be an object\n`)
+    pluginLog("warn", `Skipping ${filePath}: root value must be an object`)
     return null
   }
 
   const config = parsed as Record<string, unknown>
 
   if (config["version"] !== 1) {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Skipping ${filePath}: unsupported version (expected 1, got ${config["version"]})\n`,
-    )
+    pluginLog("warn", `Skipping ${filePath}: unsupported version (expected 1, got ${config["version"]})`)
     return null
   }
 
   if (typeof config["hooks"] !== "object" || config["hooks"] === null || Array.isArray(config["hooks"])) {
-    process.stderr.write(`[opencode-copilot-plugin] Skipping ${filePath}: "hooks" must be an object\n`)
+    pluginLog("warn", `Skipping ${filePath}: "hooks" must be an object`)
     return null
   }
 
@@ -113,9 +112,7 @@ function extractRegistry(hooks: Record<string, unknown>, filePath: string): Hook
     if (!VALID_HOOK_TYPES.has(key)) continue
 
     if (!Array.isArray(value)) {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Warning: ${filePath}: hook "${key}" must be an array, skipping\n`,
-      )
+      pluginLog("warn", `Warning: ${filePath}: hook "${key}" must be an array, skipping`)
       continue
     }
 

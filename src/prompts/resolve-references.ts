@@ -1,5 +1,6 @@
 import * as path from "node:path"
 import * as fs from "node:fs/promises"
+import { pluginLog } from "../log.ts"
 
 /** Maximum total bytes of resolved file content to include across all references in one prompt. */
 const MAX_TOTAL_RESOLVED_BYTES = 100_000
@@ -68,9 +69,7 @@ async function resolveContent(
 
     // Circular reference guard
     if (state.visited.has(absolutePath)) {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Skipping circular reference to ${absolutePath} in prompt\n`,
-      )
+      pluginLog("warn", `Skipping circular reference to ${absolutePath} in prompt`)
       segments.push(fullMatch)
       continue
     }
@@ -85,9 +84,7 @@ async function resolveContent(
     try {
       fileContent = await fs.readFile(absolutePath, "utf8")
     } catch {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Warning: could not read referenced file "${absolutePath}" — leaving link as-is\n`,
-      )
+      pluginLog("warn", `Warning: could not read referenced file "${absolutePath}" — leaving link as-is`)
       segments.push(fullMatch)
       continue
     }

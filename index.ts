@@ -14,6 +14,9 @@ import {
 } from './src/instructions.ts';
 import { buildInspectReport } from './src/inspect.ts';
 import { buildSkillToolDescription, createCopilotSkillTool } from './src/skill-tool.ts';
+import { registerCommandSymlinks } from './src/commands.ts';
+import { buildPromptToolDescription, createCopilotPromptTool } from './src/prompt-tool.ts';
+import { createCopilotInspectTool } from './src/inspect-tool.ts';
 import {
   type CopilotSkill,
   discoverGlobalSkills,
@@ -56,6 +59,7 @@ import {
   substituteArguments,
 } from './src/prompts/index.ts';
 import { getVSCodeUserDataDirs } from './src/vscode-paths.ts';
+import { setPluginLogger } from './src/log.ts';
 
 /**
  * Tool names whose args include a `filePath` field.
@@ -112,6 +116,12 @@ const FILE_TOOLS = new Set(['read', 'edit', 'write', 'patch']);
  *    content (file references + argument substitution), and injects the result as the message.
  */
 export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, client, $ }) => {
+  setPluginLogger((level, message) => {
+    client.app.log({ body: { service: 'opencode-copilot-plugin', level, message } }).catch(() => {
+      // client.app.log failed — nothing safe to do here
+    });
+  });
+
   const rootDir = worktree || directory;
   const tracker = new FileTracker();
   const confirmationTracker = new HookConfirmationTracker();
@@ -205,6 +215,9 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
       `${allAgents.length} agent(s) (${localAgents.length} local, ${globalAgents.length} global), ` +
       `${allPrompts.length} prompt(s) (${localPrompts.length} local, ${globalPrompts.length} global)`,
   );
+
+  const pluginDir = path.resolve(import.meta.dirname, '..');
+  await registerCommandSymlinks(pluginDir);
 
   /** Base hooks — always registered. */
   const hooks: Hooks = {
@@ -658,16 +671,32 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
     };
   }
 
-  if (allSkills.length > 0 || allAgents.length > 0) {
-    hooks['tool.definition'] = async (input, output) => {
-      if (input.toolID === 'copilot_skill') {
-        output.description = buildSkillToolDescription(allSkills);
-      }
-      if (input.toolID === 'copilot_agent') {
-        output.description = buildAgentToolDescription(allAgents);
-      }
-    };
-  }
+  hooks.tool = {
+    ...hooks.tool,
+    copilot_prompt: createCopilotPromptTool(() => allPrompts),
+    copilot_inspect: createCopilotInspectTool({
+      getProjectInstructions: () => projectInstructions,
+      getGlobalInstructions: () => globalInstructions,
+      getSkills: () => allSkills,
+      getAgents: () => allAgents,
+      getPrompts: () => allPrompts,
+      getHookRegistry: () => hookRegistry,
+      tracker,
+      agentTracker,
+    }),
+  };
+
+  hooks['tool.definition'] = async (input, output) => {
+    if (input.toolID === 'copilot_skill') {
+      output.description = buildSkillToolDescription(allSkills);
+    }
+    if (input.toolID === 'copilot_agent') {
+      output.description = buildAgentToolDescription(allAgents);
+    }
+    if (input.toolID === 'copilot_prompt') {
+      output.description = buildPromptToolDescription(allPrompts);
+    }
+  };
 
   return hooks;
 };

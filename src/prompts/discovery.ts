@@ -5,6 +5,7 @@ import matter from "gray-matter"
 import type { CopilotPrompt, CopilotPromptFrontmatter, PromptArgument } from "./types.ts"
 import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
 import { entryIsFile } from "../fs-utils.ts"
+import { pluginLog } from "../log.ts"
 
 /**
  * The subdirectory path (relative to the project root) where project-level prompt files live.
@@ -64,9 +65,7 @@ export function mergePrompts(local: CopilotPrompt[], global: CopilotPrompt[]): C
 
   const filteredGlobal = global.filter((p) => {
     if (localNames.has(p.name)) {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Skipping global prompt "${p.name}": overridden by a local prompt with the same name\n`,
-      )
+      pluginLog("warn", `Skipping global prompt "${p.name}": overridden by a local prompt with the same name`)
       return false
     }
     return true
@@ -134,9 +133,7 @@ async function parsePromptFile(
   const name = derivePromptName(path.basename(filePath))
   const fmName = fm.name
   if (typeof fmName === "string" && fmName !== name) {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Warning: "name" in ${filePath} is "${fmName}" but filename-derived name is "${name}". Using filename-derived name as canonical name.\n`,
-    )
+    pluginLog("warn", `Warning: "name" in ${filePath} is "${fmName}" but filename-derived name is "${name}". Using filename-derived name as canonical name.`)
   }
 
   // description is optional for prompts — fall back to the canonical name

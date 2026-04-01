@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import { getVSCodeUserDataDirs } from "./vscode-paths.ts"
 import { entryIsDirectory, entryIsFile } from "./fs-utils.ts"
+import { pluginLog } from "./log.ts"
 
 /**
  * The default directory where GitHub Copilot CLI stores user-level instruction files.
@@ -176,17 +177,13 @@ async function parseInstructionFile(
   const { data: frontmatter, content } = matter(raw)
 
   if (!frontmatter["applyTo"] || typeof frontmatter["applyTo"] !== "string") {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Skipping ${filePath}: missing or invalid "applyTo" frontmatter field\n`,
-    )
+    pluginLog("warn", `Skipping ${filePath}: missing or invalid "applyTo" frontmatter field`)
     return null
   }
 
   const applyTo = parseApplyTo(frontmatter["applyTo"] as string)
   if (applyTo.length === 0) {
-    process.stderr.write(
-      `[opencode-copilot-plugin] Skipping ${filePath}: "applyTo" resolved to zero patterns\n`,
-    )
+    pluginLog("warn", `Skipping ${filePath}: "applyTo" resolved to zero patterns`)
     return null
   }
 
