@@ -3,6 +3,7 @@ import * as os from "node:os"
 import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import { getVSCodeUserDataDirs } from "./vscode-paths.ts"
+import { entryIsDirectory, entryIsFile } from "./fs-utils.ts"
 
 /**
  * The default directory where GitHub Copilot CLI stores user-level instruction files.
@@ -145,10 +146,10 @@ async function collectInstructionFiles(
 
   for (const entry of entries) {
     const fullPath = path.join(dir, entry.name)
-    if (entry.isDirectory()) {
+    if (await entryIsDirectory(entry, dir)) {
       const nested = await collectInstructionFiles(fullPath, scope)
       results.push(...nested)
-    } else if (entry.isFile() && entry.name.endsWith(".instructions.md")) {
+    } else if (entry.name.endsWith(".instructions.md") && (await entryIsFile(entry, dir))) {
       const parsed = await parseInstructionFile(fullPath, scope)
       if (parsed) results.push(parsed)
     }

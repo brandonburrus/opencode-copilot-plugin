@@ -5,6 +5,7 @@ import matter from "gray-matter"
 import type { HookCommandDef, HookRegistry } from "../hooks/types.ts"
 import type { AgentHookCommandDef, CopilotAgent, CopilotAgentFrontmatter } from "./types.ts"
 import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
+import { entryIsFile } from "../fs-utils.ts"
 
 /** Subdirectory (relative to project root) for agent files. */
 export const LOCAL_AGENTS_SUBDIR = path.join(".github", "agents")
@@ -85,7 +86,8 @@ async function collectAgentFiles(
   }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue
+    if (!entry.name.endsWith(".md")) continue
+    if (!(await entryIsFile(entry, dir))) continue
     const filePath = path.join(dir, entry.name)
     const agent = await parseAgentFile(filePath, dir, scope)
     if (agent) results.push(agent)

@@ -3,6 +3,7 @@ import * as os from "node:os"
 import * as fs from "node:fs/promises"
 import type { CopilotHookType, HookCommandDef, HookConfigFile, HookRegistry } from "./types.ts"
 import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
+import { entryIsFile } from "../fs-utils.ts"
 
 export const LOCAL_HOOKS_SUBDIR = path.join(".github", "hooks")
 export const GLOBAL_HOOKS_DIR = path.join(os.homedir(), ".copilot", "hooks")
@@ -46,7 +47,8 @@ async function collectHookFiles(dir: string): Promise<HookRegistry> {
   const registries: HookRegistry[] = []
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".json")) continue
+    if (!entry.name.endsWith(".json")) continue
+    if (!(await entryIsFile(entry, dir))) continue
     const filePath = path.join(dir, entry.name)
     const registry = await parseHookFile(filePath)
     if (registry) registries.push(registry)

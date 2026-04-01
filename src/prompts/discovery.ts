@@ -4,6 +4,7 @@ import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import type { CopilotPrompt, CopilotPromptFrontmatter, PromptArgument } from "./types.ts"
 import { getVSCodeUserDataDirs } from "../vscode-paths.ts"
+import { entryIsFile } from "../fs-utils.ts"
 
 /**
  * The subdirectory path (relative to the project root) where project-level prompt files live.
@@ -92,7 +93,8 @@ async function collectPromptFiles(
   }
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".prompt.md")) continue
+    if (!entry.name.endsWith(".prompt.md")) continue
+    if (!(await entryIsFile(entry, dir))) continue
     const filePath = path.join(dir, entry.name)
     const prompt = await parsePromptFile(filePath, dir, scope)
     if (prompt) results.push(prompt)

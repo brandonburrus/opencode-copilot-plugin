@@ -3,6 +3,7 @@ import * as os from "node:os"
 import * as fs from "node:fs/promises"
 import matter from "gray-matter"
 import { getVSCodeUserDataDirs } from "./vscode-paths.ts"
+import { entryIsDirectory } from "./fs-utils.ts"
 
 /**
  * The default directory where GitHub Copilot stores user-level skill files.
@@ -120,7 +121,7 @@ async function collectSkillDirs(
   }
 
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue
+    if (!(await entryIsDirectory(entry, dir))) continue
     const skill = await parseSkillDir(path.join(dir, entry.name), scope)
     if (skill) results.push(skill)
   }
