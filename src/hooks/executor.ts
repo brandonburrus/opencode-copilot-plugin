@@ -1,8 +1,6 @@
 import * as path from "node:path"
-import type { PluginInput } from "@opencode-ai/plugin"
+import { spawn } from "node:child_process"
 import type { CopilotHookType, HookCommandDef, HookRegistry } from "./types.ts"
-
-type BunShell = PluginInput["$"]
 
 const DEFAULT_TIMEOUT_SEC = 30
 
@@ -29,42 +27,61 @@ export async function executeHookCommand(
   def: HookCommandDef,
   inputJson: string,
   projectRoot: string,
-  $: BunShell,
 ): Promise<HookResult> {
   if (!def.bash) return { stdout: "", exitCode: 0 }
 
   const cwd = def.cwd ? path.resolve(projectRoot, def.cwd) : projectRoot
   const timeoutMs = (def.timeoutSec ?? DEFAULT_TIMEOUT_SEC) * 1000
-  const env = def.env ? { ...process.env, ...def.env } : (process.env as Record<string, string>)
+  const env = def.env ? { ...process.env, ...def.env } : process.env
 
-  const shell = $.cwd(cwd).env(env).nothrow()
+  return new Promise((resolve) => {
+    let settled = false
 
-  try {
-    const proc = shell`bash -c ${def.bash}`.quiet()
+    const child = spawn("bash", ["-c", def.bash!], {
+      cwd,
+      env: env as NodeJS.ProcessEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+    })
 
-    const stdinWriter = proc.stdin.getWriter()
-    await stdinWriter.write(new TextEncoder().encode(inputJson))
-    await stdinWriter.close()
+    const stdoutChunks: Buffer[] = []
+    const stderrChunks: Buffer[] = []
 
-    const result = await Promise.race([
-      proc,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`Hook timed out after ${def.timeoutSec ?? DEFAULT_TIMEOUT_SEC}s`)), timeoutMs),
-      ),
-    ])
+    child.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk))
+    child.stderr.on("data", (chunk: Buffer) => stderrChunks.push(chunk))
 
-    if (result.stderr.length > 0) {
-      process.stderr.write(
-        `[opencode-copilot-plugin] Hook stderr: ${result.stderr.toString("utf8").trimEnd()}\n`,
-      )
-    }
+    child.stdin.write(inputJson, "utf8")
+    child.stdin.end()
 
-    return { stdout: result.stdout.toString("utf8"), exitCode: result.exitCode }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    process.stderr.write(`[opencode-copilot-plugin] Hook execution error: ${message}\n`)
-    return { stdout: "", exitCode: 1 }
-  }
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      child.kill()
+      const message = `Hook timed out after ${def.timeoutSec ?? DEFAULT_TIMEOUT_SEC}s`
+      process.stderr.write(`[opencode-copilot-plugin] Hook execution error: ${message}\n`)
+      resolve({ stdout: "", exitCode: 1 })
+    }, timeoutMs)
+
+    child.on("close", (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+
+      const stderr = Buffer.concat(stderrChunks).toString("utf8")
+      if (stderr.length > 0) {
+        process.stderr.write(`[opencode-copilot-plugin] Hook stderr: ${stderr.trimEnd()}\n`)
+      }
+
+      resolve({ stdout: Buffer.concat(stdoutChunks).toString("utf8"), exitCode: code ?? 1 })
+    })
+
+    child.on("error", (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      process.stderr.write(`[opencode-copilot-plugin] Hook execution error: ${err.message}\n`)
+      resolve({ stdout: "", exitCode: 1 })
+    })
+  })
 }
 
 /**
@@ -79,14 +96,13 @@ export async function runHooks(
   inputJson: string,
   registry: HookRegistry,
   projectRoot: string,
-  $: BunShell,
 ): Promise<HookResult[]> {
   const hooks = registry[type]
   if (!hooks?.length) return []
 
   const results: HookResult[] = []
   for (const hook of hooks) {
-    const result = await executeHookCommand(hook, inputJson, projectRoot, $)
+    const result = await executeHookCommand(hook, inputJson, projectRoot)
     results.push(result)
   }
   return results

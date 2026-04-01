@@ -262,7 +262,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
           }
 
           const hook = preToolHooks[i]!;
-          const result = await executeHookCommand(hook, hookInput, rootDir, $);
+          const result = await executeHookCommand(hook, hookInput, rootDir);
 
           if (!result.stdout.trim()) continue;
 
@@ -306,7 +306,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
             }
 
             const hook = agentPreToolHooks[i]!;
-            const result = await executeHookCommand(hook, hookInput, rootDir, $);
+            const result = await executeHookCommand(hook, hookInput, rootDir);
 
             if (!result.stdout.trim()) continue;
 
@@ -367,14 +367,14 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
       });
 
       if (hookRegistry.postToolUse?.length) {
-        await runHooks('postToolUse', postToolInputJson, hookRegistry, rootDir, $);
+        await runHooks('postToolUse', postToolInputJson, hookRegistry, rootDir);
       }
 
       const activeAgentName = agentTracker.getActiveAgent(input.sessionID);
       if (activeAgentName) {
         const activeAgent = allAgents.find((a) => a.name === activeAgentName);
         if (activeAgent?.hooks.postToolUse?.length) {
-          await runHooks('postToolUse', postToolInputJson, activeAgent.hooks, rootDir, $);
+          await runHooks('postToolUse', postToolInputJson, activeAgent.hooks, rootDir);
         }
       }
     },
@@ -396,14 +396,14 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
       });
 
       if (hookRegistry.userPromptSubmitted?.length) {
-        await runHooks('userPromptSubmitted', inputJson, hookRegistry, rootDir, $);
+        await runHooks('userPromptSubmitted', inputJson, hookRegistry, rootDir);
       }
 
       const activeAgentName = agentTracker.getActiveAgent(input.sessionID);
       if (activeAgentName) {
         const activeAgent = allAgents.find((a) => a.name === activeAgentName);
         if (activeAgent?.hooks.userPromptSubmitted?.length) {
-          await runHooks('userPromptSubmitted', inputJson, activeAgent.hooks, rootDir, $);
+          await runHooks('userPromptSubmitted', inputJson, activeAgent.hooks, rootDir);
         }
       }
     },
@@ -578,7 +578,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         const info = (event.properties as Record<string, unknown>)?.['info'] as Record<string, unknown> | undefined;
         const sessionID = info?.['id'] as string | undefined;
         const sessionStartJson = JSON.stringify({ timestamp: Date.now(), cwd: rootDir, source: 'new', initialPrompt: '' });
-        await runHooks('sessionStart', sessionStartJson, hookRegistry, rootDir, $);
+        await runHooks('sessionStart', sessionStartJson, hookRegistry, rootDir);
         await log(client, 'info', `Ran sessionStart hooks for session ${sessionID ?? 'unknown'}`);
       }
 
@@ -592,12 +592,12 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         agentTracker.clearSession(sessionID);
 
         const sessionEndJson = JSON.stringify({ timestamp: Date.now(), cwd: rootDir, reason: 'complete' });
-        await runHooks('sessionEnd', sessionEndJson, hookRegistry, rootDir, $);
+        await runHooks('sessionEnd', sessionEndJson, hookRegistry, rootDir);
 
         if (activeAgentName) {
           const activeAgent = allAgents.find((a) => a.name === activeAgentName);
           if (activeAgent?.hooks.sessionEnd?.length) {
-            await runHooks('sessionEnd', sessionEndJson, activeAgent.hooks, rootDir, $);
+            await runHooks('sessionEnd', sessionEndJson, activeAgent.hooks, rootDir);
           }
         }
       }
@@ -606,13 +606,13 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
         const idleInfo = (event.properties as Record<string, unknown>)?.['info'] as Record<string, unknown> | undefined;
         const sessionID: string = (idleInfo?.['id'] as string | undefined) ?? '';
         const agentStopJson = JSON.stringify({ timestamp: Date.now(), cwd: rootDir });
-        await runHooks('agentStop', agentStopJson, hookRegistry, rootDir, $);
+        await runHooks('agentStop', agentStopJson, hookRegistry, rootDir);
 
         const activeAgentName = agentTracker.getActiveAgent(sessionID);
         if (activeAgentName) {
           const activeAgent = allAgents.find((a) => a.name === activeAgentName);
           if (activeAgent?.hooks.agentStop?.length) {
-            await runHooks('agentStop', agentStopJson, activeAgent.hooks, rootDir, $);
+            await runHooks('agentStop', agentStopJson, activeAgent.hooks, rootDir);
           }
         }
       }
@@ -631,7 +631,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
             stack: '',
           },
         });
-        await runHooks('errorOccurred', errorOccurredJson, hookRegistry, rootDir, $);
+        await runHooks('errorOccurred', errorOccurredJson, hookRegistry, rootDir);
       }
     },
   };
