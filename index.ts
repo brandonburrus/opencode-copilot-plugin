@@ -12,6 +12,7 @@ import {
   type Instruction,
   type PathSpecificInstruction,
 } from './src/instructions.ts';
+import { buildInspectReport } from './src/inspect.ts';
 import { buildSkillToolDescription, createCopilotSkillTool } from './src/skill-tool.ts';
 import {
   type CopilotSkill,
@@ -429,6 +430,23 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
      */
     'command.execute.before': async (input, output) => {
       const commandBaseName = extractCommandBaseName(input.command);
+
+      if (commandBaseName === 'copilot-inspect') {
+        const trackedFiles = tracker.getTrackedFiles(input.sessionID);
+        const activeAgent = agentTracker.getActiveAgent(input.sessionID);
+        output.parts = [{ type: 'text', text: buildInspectReport({
+          projectInstructions,
+          globalInstructions,
+          allSkills,
+          allAgents,
+          allPrompts,
+          hookRegistry,
+          trackedFiles,
+          activeAgent,
+        }) } as unknown as Part];
+        return;
+      }
+
       const prompt = allPrompts.find((p) => p.name === commandBaseName);
       if (!prompt) return;
 

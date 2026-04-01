@@ -10,6 +10,7 @@ src/
   format.ts           Formats a parsed Instruction into a system-prompt string
   glob-matcher.ts     applyTo glob matching via picomatch
   file-tracker.ts     Per-session file access tracker with FIFO eviction (max 500 paths)
+  inspect.ts          Builds the /copilot-inspect report (loaded items + session state)
   prompts/
     index.ts              Barrel re-export for the prompts subsystem
     types.ts              CopilotPrompt, CopilotPromptFrontmatter, PromptArgument types
@@ -43,7 +44,7 @@ The plugin is a single async factory (`CopilotInstructionsPlugin`) that returns 
 - `tool.execute.after` — tracks every file path accessed via `read`, `edit`, `write`, or `patch` tools for the current session. Also dispatches `postToolUse` hooks (global then agent-scoped).
 - `tool.definition` — keeps the `copilot_skill` and `copilot_agent` tool descriptions current (lists can hot-reload).
 - `chat.message` — dispatches `userPromptSubmitted` hooks (global then agent-scoped) when a new user message is received.
-- `command.execute.before` — intercepts slash command execution; when the command name matches a known prompt, resolves markdown file references, substitutes argument placeholders, prepends an informational header, and replaces `output.parts` with the fully resolved prompt content.
+- `command.execute.before` — intercepts slash command execution; `/copilot-inspect` is a built-in command that returns a report of all loaded items and current session state (see below). For all other commands, when the name matches a known prompt, resolves markdown file references, substitutes argument placeholders, prepends an informational header, and replaces `output.parts` with the fully resolved prompt content.
 - `event` — handles `file.watcher.updated` for hot-reloading instruction/prompt/skill/agent caches independently; dispatches session lifecycle hooks (`sessionStart`, `sessionEnd`, `agentStop`, `errorOccurred`); frees per-session tracker memory on `session.deleted`.
 
 The `copilot_skill` tool is only registered when at least one skill exists at startup. The `copilot_agent` tool is only registered when at least one agent exists at startup. Items added after init require an OpenCode restart.
@@ -114,6 +115,7 @@ Prompt files use the `.prompt.md` extension. The canonical prompt name is derive
 - `parseCommandArguments` handles both `key=value` pairs (with quoted-value support) and positional strings (mapped to the first declared argument).
 - The `command.execute.before` hook matches commands by their base name (scope prefix and `:` path separators stripped). Unsupported frontmatter fields (`agent`, `model`, `tools`) are surfaced as informational notes in the prepended header but are not enforced.
 - Instructions with `applyTo` pattern `**` or `**/*` are treated as universally applicable and injected on every LLM turn regardless of whether any files have been tracked in the session.
+- `/copilot-inspect` is a built-in slash command that requires no `.prompt.md` file. When invoked, `command.execute.before` intercepts it (before prompt-matching) and returns a markdown report via `buildInspectReport` in `src/inspect.ts`. The report covers: all loaded instructions with active/inactive status per session, skills, agents (with active marker), prompts, hooks, and session state (active agent + tracked files).
 
 ## Dev workflow
 
