@@ -82,24 +82,23 @@ async function collectPromptFiles(
   dir: string,
   scope: CopilotPrompt["scope"],
 ): Promise<CopilotPrompt[]> {
-  const results: CopilotPrompt[] = []
-
   let entries: import("node:fs").Dirent<string>[]
   try {
     entries = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" })
   } catch {
-    return results
+    return []
   }
 
-  for (const entry of entries) {
-    if (!entry.name.endsWith(".prompt.md")) continue
-    if (!(await entryIsFile(entry, dir))) continue
-    const filePath = path.join(dir, entry.name)
-    const prompt = await parsePromptFile(filePath, dir, scope)
-    if (prompt) results.push(prompt)
-  }
-
-  return results
+  const prompts = await Promise.all(
+    entries
+      .filter((entry) => entry.name.endsWith(".prompt.md"))
+      .map(async (entry) => {
+        if (!(await entryIsFile(entry, dir))) return null
+        const filePath = path.join(dir, entry.name)
+        return parsePromptFile(filePath, dir, scope)
+      }),
+  )
+  return prompts.filter((p): p is CopilotPrompt => p !== null)
 }
 
 /**

@@ -127,29 +127,58 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
   const confirmationTracker = new HookConfirmationTracker();
   const agentTracker = new AgentTracker();
 
+  const [
+    projectInstructionsInit,
+    globalInstructionsInit,
+    vsCodeInstructionsInit,
+    localSkillsInit,
+    globalSkillsInit,
+    vsCodeSkillsInit,
+    hookRegistryInit,
+    localAgentsInit,
+    globalAgentsInit,
+    vsCodeAgentsInit,
+    localPromptsInit,
+    globalPromptsInit,
+    vsCodePromptsInit,
+    vsCodeUserDataDirsInit,
+  ] = await Promise.all([
+    discoverInstructions(rootDir),
+    discoverGlobalInstructions(),
+    discoverVSCodeInstructions(),
+    discoverLocalSkills(rootDir),
+    discoverGlobalSkills(),
+    discoverVSCodeSkills(),
+    discoverHookRegistry(rootDir),
+    discoverLocalAgents(rootDir),
+    discoverGlobalAgents(),
+    discoverVSCodeAgents(),
+    discoverLocalPrompts(rootDir),
+    discoverGlobalPrompts(),
+    discoverVSCodePrompts(),
+    getVSCodeUserDataDirs(),
+  ]);
+
   /** Project-level instruction cache — replaced on hot-reload. */
-  let projectInstructions: Instruction[] = await discoverInstructions(rootDir);
+  let projectInstructions: Instruction[] = projectInstructionsInit;
 
   /**
    * User-global instruction cache — combines `~/.copilot/instructions/` (primary)
    * with VS Code user data instructions (secondary). Replaced on hot-reload.
    */
   let globalInstructions: PathSpecificInstruction[] = [
-    ...await discoverGlobalInstructions(),
-    ...await discoverVSCodeInstructions(),
+    ...globalInstructionsInit,
+    ...vsCodeInstructionsInit,
   ];
 
   /** Project-local skill cache — replaced on hot-reload. */
-  let localSkills: CopilotSkill[] = await discoverLocalSkills(rootDir);
+  let localSkills: CopilotSkill[] = localSkillsInit;
 
   /**
    * User-global skill cache — `~/.copilot/skills/` merged with VS Code user data skills
    * (`~/.copilot/` takes precedence). Replaced on hot-reload.
    */
-  let globalSkills: CopilotSkill[] = mergeSkills(
-    await discoverGlobalSkills(),
-    await discoverVSCodeSkills(),
-  );
+  let globalSkills: CopilotSkill[] = mergeSkills(globalSkillsInit, vsCodeSkillsInit);
 
   /** Merged, deduplicated skill list. Local skills take precedence over global. */
   let allSkills: CopilotSkill[] = mergeSkills(localSkills, globalSkills);
@@ -158,34 +187,28 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
    * Hook registry loaded once at init — not hot-reloaded.
    * Project hooks run before global hooks for each hook type.
    */
-  const hookRegistry: HookRegistry = await discoverHookRegistry(rootDir);
+  const hookRegistry: HookRegistry = hookRegistryInit;
 
   /** Project-local agent cache — replaced on hot-reload. */
-  let localAgents: CopilotAgent[] = await discoverLocalAgents(rootDir);
+  let localAgents: CopilotAgent[] = localAgentsInit;
 
   /**
    * User-global agent cache — `~/.copilot/agents/` merged with VS Code user data agents
    * (`~/.copilot/` takes precedence). Replaced on hot-reload.
    */
-  let globalAgents: CopilotAgent[] = mergeAgents(
-    await discoverGlobalAgents(),
-    await discoverVSCodeAgents(),
-  );
+  let globalAgents: CopilotAgent[] = mergeAgents(globalAgentsInit, vsCodeAgentsInit);
 
   /** Merged, deduplicated agent list. Local agents take precedence over global. */
   let allAgents: CopilotAgent[] = mergeAgents(localAgents, globalAgents);
 
   /** Project-local prompt cache — replaced on hot-reload. */
-  let localPrompts: CopilotPrompt[] = await discoverLocalPrompts(rootDir);
+  let localPrompts: CopilotPrompt[] = localPromptsInit;
 
   /**
    * User-global prompt cache — `~/.copilot/prompts/` merged with VS Code user data prompts
    * (`~/.copilot/` takes precedence). Replaced on hot-reload.
    */
-  let globalPrompts: CopilotPrompt[] = mergePrompts(
-    await discoverGlobalPrompts(),
-    await discoverVSCodePrompts(),
-  );
+  let globalPrompts: CopilotPrompt[] = mergePrompts(globalPromptsInit, vsCodePromptsInit);
 
   /** Merged, deduplicated prompt list. Local prompts take precedence over global. */
   let allPrompts: CopilotPrompt[] = mergePrompts(localPrompts, globalPrompts);
@@ -203,7 +226,7 @@ export const CopilotInstructionsPlugin: Plugin = async ({ directory, worktree, c
    * VS Code user data base directories — used for hot-reload path matching.
    * Resolved once at init; changes to the VS Code installation require an OpenCode restart.
    */
-  const vsCodeUserDataDirs = await getVSCodeUserDataDirs();
+  const vsCodeUserDataDirs = vsCodeUserDataDirsInit;
 
   await log(
     client,

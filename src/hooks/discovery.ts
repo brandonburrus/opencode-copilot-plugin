@@ -45,17 +45,18 @@ async function collectHookFiles(dir: string): Promise<HookRegistry> {
     return {}
   }
 
-  const registries: HookRegistry[] = []
-
-  for (const entry of entries) {
-    if (!entry.name.endsWith(".json")) continue
-    if (!(await entryIsFile(entry, dir))) continue
-    const filePath = path.join(dir, entry.name)
-    const registry = await parseHookFile(filePath)
-    if (registry) registries.push(registry)
-  }
-
-  return registries.reduce(mergeRegistries, {})
+  const registries = await Promise.all(
+    entries
+      .filter((entry) => entry.name.endsWith(".json"))
+      .map(async (entry) => {
+        if (!(await entryIsFile(entry, dir))) return null
+        const filePath = path.join(dir, entry.name)
+        return parseHookFile(filePath)
+      })
+  )
+  return registries
+    .filter((r): r is HookRegistry => r !== null)
+    .reduce(mergeRegistries, {})
 }
 
 async function parseHookFile(filePath: string): Promise<HookRegistry | null> {

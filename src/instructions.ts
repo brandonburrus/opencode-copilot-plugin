@@ -135,28 +135,27 @@ async function collectInstructionFiles(
   dir: string,
   scope: PathSpecificInstruction["scope"],
 ): Promise<PathSpecificInstruction[]> {
-  const results: PathSpecificInstruction[] = []
-
   let entries: import("node:fs").Dirent<string>[]
   try {
     entries = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" })
   } catch {
-    // Directory doesn't exist
-    return results
+    return []
   }
 
-  for (const entry of entries) {
-    const fullPath = path.join(dir, entry.name)
-    if (await entryIsDirectory(entry, dir)) {
-      const nested = await collectInstructionFiles(fullPath, scope)
-      results.push(...nested)
-    } else if (entry.name.endsWith(".instructions.md") && (await entryIsFile(entry, dir))) {
-      const parsed = await parseInstructionFile(fullPath, scope)
-      if (parsed) results.push(parsed)
-    }
-  }
-
-  return results
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(dir, entry.name)
+      if (await entryIsDirectory(entry, dir)) {
+        return collectInstructionFiles(fullPath, scope)
+      }
+      if (entry.name.endsWith(".instructions.md") && (await entryIsFile(entry, dir))) {
+        const parsed = await parseInstructionFile(fullPath, scope)
+        return parsed ? [parsed] : []
+      }
+      return []
+    }),
+  )
+  return nested.flat()
 }
 
 /**

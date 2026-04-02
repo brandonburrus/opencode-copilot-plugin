@@ -110,22 +110,20 @@ async function collectSkillDirs(
   dir: string,
   scope: CopilotSkill["scope"],
 ): Promise<CopilotSkill[]> {
-  const results: CopilotSkill[] = []
-
   let entries: import("node:fs").Dirent<string>[]
   try {
     entries = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" })
   } catch {
-    return results
+    return []
   }
 
-  for (const entry of entries) {
-    if (!(await entryIsDirectory(entry, dir))) continue
-    const skill = await parseSkillDir(path.join(dir, entry.name), scope)
-    if (skill) results.push(skill)
-  }
-
-  return results
+  const skills = await Promise.all(
+    entries.map(async (entry) => {
+      if (!(await entryIsDirectory(entry, dir))) return null
+      return parseSkillDir(path.join(dir, entry.name), scope)
+    }),
+  )
+  return skills.filter((s): s is CopilotSkill => s !== null)
 }
 
 /**

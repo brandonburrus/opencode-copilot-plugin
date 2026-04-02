@@ -21,35 +21,33 @@ export async function registerCommandSymlinks(pluginDir: string): Promise<void> 
 
     const entries = await fs.readdir(sourceDir, { withFileTypes: true });
 
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".md")) {
-        continue;
-      }
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+        .map(async (entry) => {
+          const sourcePath = path.join(sourceDir, entry.name);
+          const targetPath = path.join(targetDir, entry.name);
 
-      const sourcePath = path.join(sourceDir, entry.name);
-      const targetPath = path.join(targetDir, entry.name);
+          try {
+            const stat = await fs.lstat(targetPath);
 
-      try {
-        const stat = await fs.lstat(targetPath);
-
-        if (stat.isSymbolicLink()) {
-          const existingTarget = await fs.readlink(targetPath);
-          if (existingTarget === sourcePath) {
-            continue;
+            if (stat.isSymbolicLink()) {
+              const existingTarget = await fs.readlink(targetPath);
+              if (existingTarget === sourcePath) return;
+              await fs.unlink(targetPath);
+              await fs.symlink(sourcePath, targetPath);
+            } else {
+              pluginLog("warn", `Skipping command registration for ${entry.name}: a non-symlink file already exists at ${targetPath}`);
+            }
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+              await fs.symlink(sourcePath, targetPath);
+            } else {
+              throw err;
+            }
           }
-          await fs.unlink(targetPath);
-          await fs.symlink(sourcePath, targetPath);
-        } else {
-          pluginLog("warn", `Skipping command registration for ${entry.name}: a non-symlink file already exists at ${targetPath}`);
-        }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          await fs.symlink(sourcePath, targetPath);
-        } else {
-          throw err;
-        }
-      }
-    }
+        })
+    );
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     pluginLog("error", `Failed to register command symlinks: ${message}`);

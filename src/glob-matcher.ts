@@ -6,6 +6,18 @@ import picomatch from "picomatch"
  */
 const UNIVERSAL_PATTERNS = new Set(["**", "**/*"])
 
+/** Compiled picomatch matchers keyed by pattern string, reused across all calls. */
+const matcherCache = new Map<string, ReturnType<typeof picomatch>>()
+
+function getOrCreateMatcher(pattern: string): ReturnType<typeof picomatch> {
+  let matcher = matcherCache.get(pattern)
+  if (!matcher) {
+    matcher = picomatch(pattern, { dot: true })
+    matcherCache.set(pattern, matcher)
+  }
+  return matcher
+}
+
 /**
  * Returns true if at least one path in trackedFiles matches at least one of
  * the applyTo glob patterns.
@@ -17,8 +29,9 @@ const UNIVERSAL_PATTERNS = new Set(["**", "**/*"])
  * Matching is performed with dot:true so that dotfiles (e.g. .env) are
  * included when patterns like "**" are used.
  *
- * Each pattern is compiled once and the function short-circuits on the first hit
- * so it is safe to call on every LLM turn.
+ * Compiled matchers are cached by pattern string so each unique pattern is only
+ * compiled once across all calls, regardless of how many LLM turns occur.
+ * The function short-circuits on the first hit.
  */
 export function matchesApplyTo(
   trackedFiles: ReadonlySet<string>,
@@ -30,7 +43,7 @@ export function matchesApplyTo(
 
   if (trackedFiles.size === 0) return false
 
-  const matchers = applyToPatterns.map((pattern) => picomatch(pattern, { dot: true }))
+  const matchers = applyToPatterns.map(getOrCreateMatcher)
 
   for (const filePath of trackedFiles) {
     for (const isMatch of matchers) {

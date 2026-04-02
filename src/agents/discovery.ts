@@ -75,24 +75,23 @@ async function collectAgentFiles(
   dir: string,
   scope: CopilotAgent["scope"],
 ): Promise<CopilotAgent[]> {
-  const results: CopilotAgent[] = []
-
   let entries: import("node:fs").Dirent<string>[]
   try {
     entries = await fs.readdir(dir, { withFileTypes: true, encoding: "utf8" })
   } catch {
-    return results
+    return []
   }
 
-  for (const entry of entries) {
-    if (!entry.name.endsWith(".md")) continue
-    if (!(await entryIsFile(entry, dir))) continue
-    const filePath = path.join(dir, entry.name)
-    const agent = await parseAgentFile(filePath, dir, scope)
-    if (agent) results.push(agent)
-  }
-
-  return results
+  const agents = await Promise.all(
+    entries
+      .filter((entry) => entry.name.endsWith(".md"))
+      .map(async (entry) => {
+        if (!(await entryIsFile(entry, dir))) return null
+        const filePath = path.join(dir, entry.name)
+        return parseAgentFile(filePath, dir, scope)
+      }),
+  )
+  return agents.filter((a): a is CopilotAgent => a !== null)
 }
 
 /**
